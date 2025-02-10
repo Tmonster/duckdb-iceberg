@@ -50,3 +50,13 @@ jobs:
         working-directory: scripts/
         run: |
           ./start-rest-catalog.sh
+
+      - name: Make debug
+        run: |
+          make debug
+
+      - name: Test debug
+        env:
+          DUCKDB_ICEBERG_HAVE_TEST_DATA: 1
+        run: |
+          make test_debug
