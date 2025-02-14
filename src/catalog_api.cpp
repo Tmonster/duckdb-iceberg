@@ -7,6 +7,15 @@
 #include <sys/stat.h>
 #include <optional>
 
+#include <aws/core/Aws.h>
+#include <aws/s3/S3Client.h>
+#include <iostream>
+#include <aws/core/Aws.h>
+#include <aws/core/auth/AWSCredentialsProviderChain.h>
+#include <aws/core/http/curl/CurlHttpClient.h>
+#include <aws/core/http/HttpRequest.h>
+
+
 using namespace duckdb_yyjson;
 namespace duckdb {
 
@@ -131,7 +140,42 @@ static string DeleteRequest(const string &url, const string &token = "", curl_sl
     throw InternalException("Failed to initialize curl");
 }
 
+static string GetRequestAws(const string &url) {
+	const Aws::Client::ClientConfiguration clientConfig;
+
+	auto curl_client = make_uniq<Aws::Http::CurlHttpClient>(clientConfig);
+
+	std::shared_ptr<Aws::Http::HttpClientFactory> MyClientFactory;
+	std::shared_ptr<Aws::Http::HttpClient> MyHttpClient;
+
+	MyHttpClient = Aws::Http::CreateHttpClient(clientConfig);
+	const Aws::String uri(url);
+
+	std::shared_ptr<Aws::Http::HttpRequest> req(
+				   Aws::Http::CreateHttpRequest(uri,
+									 Aws::Http::HttpMethod::HTTP_GET,
+									 Aws::Utils::Stream::DefaultResponseStreamFactoryMethod));
+
+	auto provider = std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
+	auto signer = make_uniq<Aws::Client::AWSAuthV4Signer>(provider, "glue", "us-east-1");
+	signer->SignRequest(*req);
+
+	std::shared_ptr<Aws::Http::HttpResponse> res = MyHttpClient->MakeRequest(req);
+	Aws::Http::HttpResponseCode resCode = res->GetResponseCode();
+	if (resCode == Aws::Http::HttpResponseCode::OK) {
+		Aws::StringStream resBody;
+		resBody <<  res->GetResponseBody().rdbuf();
+		return resBody.str();
+	} else {
+		throw IOException("Failed to query %s, http error %d thrown", url, res->GetResponseCode());
+	}
+}
+
 static string GetRequest(const string &url, const string &token = "", curl_slist *extra_headers = NULL) {
+	if (StringUtil::StartsWith(url, "https://glue." )) {
+		auto str = GetRequestAws(url);
+		return str;
+	}
 	CURL *curl;
 	CURLcode res;
 	string readBuffer;
@@ -265,6 +309,7 @@ IRCAPITableCredentials IRCAPI::GetTableCredentials(const string &internal, const
 }
 
 string IRCAPI::GetToken(string id, string secret, string endpoint) {
+	return "";
 	string post_data = "grant_type=client_credentials&client_id=" + id + "&client_secret=" + secret + "&scope=PRINCIPAL_ROLE:ALL";
 	string api_result = PostRequest(endpoint + "/v1/oauth/tokens", post_data);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(api_result_to_doc(api_result));
@@ -336,6 +381,7 @@ IRCAPITable IRCAPI::GetTable(
 }
 
 string IRCAPI::GetOptionallyPrefixedURL(const string &api_version, const string &prefix) {
+	return prefix;
   D_ASSERT((int32_t)api_version.find(std::string("/")) < 0 && (int32_t)prefix.find(std::string("/")) < 0);
 	if (prefix.empty()) {
 		return "/" + api_version + "/";

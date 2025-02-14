@@ -66,6 +66,7 @@ find_package(Boost REQUIRED COMPONENTS iostreams program_options system
                                        filesystem)
 find_package(Snappy CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
 target_link_libraries(
   avro_static_release
   INTERFACE Boost::boost
@@ -86,6 +87,12 @@ target_link_libraries(
             ZLIB::ZLIB)
 
 find_package(CURL REQUIRED)
+
+# AWS SDK FROM vcpkg
+target_include_directories(${EXTENSION_NAME} PUBLIC $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
+target_link_libraries(${EXTENSION_NAME} PUBLIC ${AWSSDK_LINK_LIBRARIES})
+target_include_directories(${TARGET_NAME}_loadable_extension PRIVATE $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
+target_link_libraries(${TARGET_NAME}_loadable_extension ${AWSSDK_LINK_LIBRARIES})
 
 # Link dependencies into extension
 target_link_libraries(${EXTENSION_NAME} PUBLIC optimized avro_static_release CURL::libcurl

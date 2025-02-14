@@ -5,7 +5,11 @@
       "features": ["snappy"]
     },
     "curl",
-    "openssl"
+    "openssl",
+    {
+      "name": "aws-sdk-cpp",
+      "features": [ "sso", "sts" ]
+    }
   ],
   "vcpkg-configuration": {
     "overlay-ports": [

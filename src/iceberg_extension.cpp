@@ -20,6 +20,8 @@
 #include "duckdb/main/extension_util.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 #include "catalog_api.hpp"
+#include <aws/core/Aws.h>
+#include <aws/s3/S3Client.h>
 
 namespace duckdb {
 
@@ -149,6 +151,9 @@ public:
 };
 
 static void LoadInternal(DatabaseInstance &instance) {
+	Aws::SDKOptions options;
+	Aws::InitAPI(options); // Should only be called once.
+
 	auto &config = DBConfig::GetConfig(instance);
 
 	config.AddExtensionOption(
