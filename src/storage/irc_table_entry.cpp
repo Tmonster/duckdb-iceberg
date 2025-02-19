@@ -52,6 +52,7 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	}
 
 	auto &secret_manager = SecretManager::Get(context);
+	
 	// Get Credentials from IRC API
 	auto table_credentials = IRCAPI::GetTableCredentials(
 		ic_catalog.internal_name, table_data->schema_name, table_data->name, ic_catalog.credentials);

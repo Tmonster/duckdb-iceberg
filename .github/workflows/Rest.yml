@@ -39,6 +39,10 @@ jobs:
         with:
           vcpkgGitCommitId: 5e5d0e1cd7785623065e77eff011afdeec1a3574
 
+      - name: Setup Ccache
+        uses: hendrikmuhs/ccache-action@main
+        continue-on-error: true
+
       - name: Build extension
         env:
           GEN: ninja
@@ -47,12 +51,16 @@ jobs:
           make release
 
       - name: Start Rest Catalog
-        working-directory: scripts/
         run: |
-          ./start-rest-catalog.sh
+          make start-rest-catalog
 
-      - name: Test With rest catalog
+      - name: Generate data
+        run: |
+          make data_ci
+
+      - name: Test with rest catalog
         env:
           ICEBERG_SERVER_AVAILABLE: 1
+          DUCKDB_ICEBERG_HAVE_GENERATED_DATA: 1
         run: |
           make test_release

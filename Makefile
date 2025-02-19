@@ -10,13 +10,26 @@ CORE_EXTENSIONS='parquet;httpfs'
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
+start-rest-catalog: install_requirements
+	./scripts/start-rest-catalog.sh
+
+install_requirements:
+	python3 -m pip install -r scripts/requirements.txt
+
+# make data_ci is used in CI. Calling data clean fails
+# with permission errors since the docker image running the spark rest API
+# is mounted to data/generated/iceberg/spark-rest
+data_ci:
+	mkdir -p data
+	python3 scripts/data_generators/generate_data.py
+
 # Custom makefile targets
 data: data_clean
-	python3 scripts/test_data_generator/generate_iceberg.py 0.001 data/iceberg/generated_spec1_0_001 1
-	python3 scripts/test_data_generator/generate_iceberg.py 0.001 data/iceberg/generated_spec2_0_001 2
+	mkdir -p data
+	python3 scripts/data_generators/generate_data.py
 
 data_large: data data_clean
-	python3 scripts/test_data_generator/generate_iceberg.py 1 data/iceberg/generated_spec2_1 2
+	python3 scripts/data_generators/generate_data.py
 
 data_clean:
-	rm -rf data/iceberg/generated_*
+	rm -rf data/generated

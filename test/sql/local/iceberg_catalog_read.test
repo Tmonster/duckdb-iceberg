@@ -36,8 +36,9 @@ mode skip
 query IIIIII
 Show all tables;
 ----
-my_datalake	default	pyspark_iceberg_table	[__]	[INTEGER]	false
-my_datalake	default	table_mor_deletes	[__]	[INTEGER]	false
+my_datalake	default	pyspark_iceberg_table_v1	[__]	[INTEGER]	false
+my_datalake	default	pyspark_iceberg_table_v2	[__]	[INTEGER]	false
+my_datalake	default	table_more_deletes	[__]	[INTEGER]	false
 my_datalake	default	table_partitioned	[__]	[INTEGER]	false
 my_datalake	default	table_unpartitioned	[__]	[INTEGER]	false
 
@@ -67,9 +68,9 @@ select * from my_datalake.default.table_unpartitioned order by all;
 2023-03-11	11	k
 2023-03-12	12	l
 
-# test deletes (see provision.py for where deletes occur)
+# test deletes (see generate_iceberg_spark_rest.py for where deletes occur)
 query III
-select * from my_datalake.default.table_mor_deletes order by all;
+select * from my_datalake.default.table_more_deletes order by all;
 ----
 2023-03-01	1	a
 2023-03-02	2	b
@@ -77,6 +78,7 @@ select * from my_datalake.default.table_mor_deletes order by all;
 2023-03-10	10	j
 2023-03-11	11	k
 2023-03-12	12	l
+
 
 query I
 select sum(l_suppkey_long) from my_datalake.default.pyspark_iceberg_table;
@@ -104,12 +106,12 @@ Create table my_datalake.default.new_table (a int, b varchar);
 <REGEX>:.*Not implemented Error.*
 
 statement error
-Alter table my_datalake.default.table_mor_deletes add column new_column INTEGER default 10;
+Alter table my_datalake.default.table_more_deletes add column new_column INTEGER default 10;
 ----
 <REGEX>:.*Not implemented Error.*
 
 statement error
-Drop table my_datalake.default.table_mor_deletes;
+Drop table my_datalake.default.table_more_deletes;
 ----
 <REGEX>:.*Not implemented Error.*
 
