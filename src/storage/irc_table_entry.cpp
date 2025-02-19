@@ -56,13 +56,14 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	}
 
 	auto &secret_manager = SecretManager::Get(context);
+	
 	// Get Credentials from IRC API
 	auto table_credentials = IRCAPI::GetTableCredentials(
 		ic_catalog.internal_name, table_data->schema_name, table_data->name, ic_catalog.credentials);
 	// First check if table credentials are set (possible the IC catalog does not return credentials)
 	if (!table_credentials.key_id.empty()) {
 		// Inject secret into secret manager scoped to this path
-		CreateSecretInfo info(OnCreateConflict::ERROR_ON_CONFLICT, SecretPersistType::TEMPORARY);
+		CreateSecretInfo info(OnCreateConflict::REPLACE_ON_CONFLICT, SecretPersistType::TEMPORARY);
 		info.name = "__internal_ic_" + table_data->table_id;
 		info.type = "s3";
 		info.provider = "config";
