@@ -16,16 +16,8 @@ start-rest-catalog: install_requirements
 install_requirements:
 	python3 -m pip install -r scripts/requirements.txt
 
-# make data_ci is used in CI. Calling data clean fails
-# with permission errors since the docker image running the spark rest API
-# is mounted to data/generated/iceberg/spark-rest
-data_ci:
-	mkdir -p data
-	python3 scripts/data_generators/generate_data.py
-
 # Custom makefile targets
-data: data_clean
-	mkdir -p data
+data: data_clean start-rest-catalog
 	python3 scripts/data_generators/generate_data.py
 
 data_large: data data_clean
