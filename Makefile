@@ -19,4 +19,21 @@ data_large: data data_clean
 	python3 scripts/test_data_generator/generate_iceberg.py 1 data/iceberg/generated_spec2_1 2
 
 data_clean:
-	rm -rf data/iceberg/generated_*
+	rm -rf data_generated/
+
+format-fix:
+	rm -rf src/amalgamation/*
+	python3 scripts/format.py --all --fix --noconfirm
+
+format-check:
+	python3 scripts/format.py --all --check
+
+
+format-head:
+	python3 scripts/format.py HEAD --fix --noconfirm
+
+format-changes:
+	python3 scripts/format.py HEAD --fix --noconfirm
+
+format-main:
+	python3 scripts/format.py main --fix --noconfirm
