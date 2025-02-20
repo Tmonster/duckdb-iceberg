@@ -2,13 +2,11 @@
 # description: test integration with iceberg catalog read
 # group: [iceberg]
 
-require-env ICEBERG_SERVER_AVAILABLE
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
 require parquet
 
 require iceberg
-
-require httpfs
 
 statement ok
 set enable_logging=true;
