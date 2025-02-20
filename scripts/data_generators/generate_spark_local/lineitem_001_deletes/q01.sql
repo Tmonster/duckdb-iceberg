@@ -1,4 +1,4 @@
-update default.table_with_deletes
+update iceberg_catalog.lineitem_001_deletes
 set l_orderkey=NULL,
     l_partkey=NULL,
     l_suppkey=NULL,

@@ -1,4 +1,4 @@
-CREATE or REPLACE TABLE default.table_with_deletes
+CREATE or REPLACE TABLE default.lineitem_sf1_deletes
        TBLPROPERTIES (
         'format-version'='2',
         'write.update.mode'='merge-on-read'
