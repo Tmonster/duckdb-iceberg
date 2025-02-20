@@ -399,7 +399,10 @@ void IcebergMultiFileList::ScanDeleteFile(const string &delete_file_path) const 
 	ThreadContext thread_context(context);
 	ExecutionContext execution_context(context, thread_context, nullptr);
 
-	vector<column_t> column_ids = {0, 1};
+	vector<column_t> column_ids;
+	for (idx_t i = 0; i < return_types.size(); i++) {
+		column_ids.push_back(i);
+	}
 	TableFunctionInitInput input(bind_data.get(), column_ids, vector<idx_t>(), nullptr);
 	auto global_state = parquet_scan.init_global(context, input);
 	auto local_state = parquet_scan.init_local(execution_context, input, global_state.get());
@@ -410,8 +413,9 @@ void IcebergMultiFileList::ScanDeleteFile(const string &delete_file_path) const 
 		parquet_scan.function(context, function_input, result);
 
 		idx_t count = result.size();
-		result.data[0].Flatten(count);
-		result.data[1].Flatten(count);
+		for (auto &vec : result.data) {
+			vec.Flatten(count);
+		}
 
 		auto names = FlatVector::GetData<string_t>(result.data[0]);
 		auto row_ids = FlatVector::GetData<int64_t>(result.data[1]);
