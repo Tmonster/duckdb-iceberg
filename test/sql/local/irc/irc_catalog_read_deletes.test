@@ -48,6 +48,7 @@ select message::INT > 0 from duckdb_logs() where type like '%duckdb-iceberg.fina
 ----
 true
 
+mode skip
 
 # Verify Deletes
 # joins with a table that has deletes.
@@ -72,12 +73,6 @@ order by l1_deletes.l_orderkey, count
 limit 10
 ;
 
-
-mode skip
-
-# Verify files are getting pruned? (Log messages?)
-
-
 # Verify a single delete
 query IIII nosort result_3
 select l_orderkey, l_partkey, l_suppkey, l_quantity from my_datalake.default.lineitem_sf_01_1_delete order by l_partkey, l_orderkey limit 10;
@@ -98,15 +93,7 @@ select count(*) from read_parquet('data/generated/intermediates/spark-rest/linei
 0
 
 
-# lineitem_sf_01_missing_shipmode created with statement
-# CREATE OR REPLACE TABLE default.lineitem_sf_01_missing_shipmode
-# TBLPROPERTIES (
-#     'format-version'='2',
-#     'write.update.mode'='merge-on-read'
-# )
-# as select * from parquet_file_view
-# USING iceberg
-# PARTITIONED BY (l_shipmode);
+# Verify reading from large partitioned table
 # add tests for partitioned tables.
 query II nosort result_4
 select l_shipmode, count(*) count from my_datalake.default.lineitem_partitioned_l_shipmode group by l_shipmode order by count;
@@ -117,9 +104,7 @@ select l_shipmode, count(*) count from read_parquet('data/generated/intermediate
 ----
 
 
-# create table lineitem_partitioned_mmany_deletes as select * from lineitem (merge on write, partition by l_shipmode)
-# select count(*), l_shipmode from lineitem where l_linenumber in (3,4,5,6) group by l_shipmode ;
-# add tests for partitioned tables.
+# Verify reading from large partitioned table with deletes
 query II nosort result_5
 select l_shipmode, count(*) count from my_datalake.default.lineitem_partitioned_l_shipmode_deletes group by l_shipmode order by count;
 ----
