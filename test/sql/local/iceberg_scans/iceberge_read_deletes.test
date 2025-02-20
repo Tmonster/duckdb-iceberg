@@ -18,14 +18,12 @@ query I nosort results_1
 select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from ICEBERG_SCAN('data/generated/iceberg/spark-local/table_with_deletes');
 
 query I nosort results_1
-select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('data/generated/intermediates/spark-rest/table_with_deletes/last/data.parquet/*.parquet');
+select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('data/generated/intermediates/spark-local/table_with_deletes/last/data.parquet/*.parquet');
 
 query I
 select message::INT > 0 from duckdb_logs() where type like '%duckdb-iceberg.finalize_deletes%';
 ----
 true
-
-mode skip
 
 # Verify Deletes
 # joins with a table that has deletes.
