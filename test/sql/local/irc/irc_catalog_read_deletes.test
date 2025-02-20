@@ -118,16 +118,3 @@ select message::INT > 0 from duckdb_logs() where type like '%duckdb-iceberg.fina
 ----
 1
 
-
-
-# Add cloud testing to the s3 catalog tables repo.
-
-# Verify views can (or cannot) be created. (i.e create view as select * from my_datalake.default.table_more_deletes;
-# also views in the actual cloud testing environment.
-
-# Work more towards unifying the generators.
-# Maybe test against OSX/Windows?
-
-# Upload Rest of tpch sf=1 tables to check benchmarking. See if error persists.
-
-
