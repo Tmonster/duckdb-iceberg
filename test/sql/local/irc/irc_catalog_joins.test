@@ -31,8 +31,6 @@ CREATE SECRET (
 statement ok
 ATTACH '' AS my_datalake (TYPE ICEBERG);
 
-mode skip
-
 query IIIIII
 Show all tables;
 ----
@@ -43,7 +41,8 @@ my_datalake	default	table_partitioned	[__]	[INTEGER]	false
 my_datalake	default	table_unpartitioned	[__]	[INTEGER]	false
 my_datalake	default	table_with_deletes	[__]	[INTEGER]	false
 
-
+statement ok
+set enable_logging=true;
 # verify deletes
 
 # TODO verify the catalog has deletes (rest catalog stores data differently from local catalog)
@@ -53,4 +52,29 @@ select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from my_datalake.default.t
 query I nosort results_1
 select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('data/generated/intermediates/spark-rest/table_with_deletes/last/data.parquet/*.parquet');
 
+query I
+select message::INT > 0 from duckdb_logs() where type like '%duckdb-iceberg.finalize_deletes%';
+----
+true
 
+
+
+# Verify Deletes
+# joins with a table that has deletes.
+# Verify files are getting pruned? (Log messages?)
+
+# Verify different delets. I don't know how, but maybe we can generate many deletes some how?
+
+# test specific types and values, not just aggregates.
+
+# Add cloud testing to the s3 catalog tables repo.
+
+# Verify views can (or cannot) be created. (i.e create view as select * from my_datalake.default.table_more_deletes;
+# also views in the actual cloud testing environment.
+
+# Work more towards unifying the generators.
+# Maybe test against OSX/Windows?
+
+# Upload Rest of tpch sf=1 tables to check benchmarking. See if error persists.
+
+# add tests for partitioned tables.

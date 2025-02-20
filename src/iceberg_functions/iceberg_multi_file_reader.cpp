@@ -470,6 +470,7 @@ void IcebergMultiFileList::ProcessDeletes() const {
 	for (auto &it : delete_data) {
 		auto &deletes = it.second;
 		deletes.Finalize();
+		DUCKDB_LOG_INFO(context, "duckdb-iceberg.finalize_deletes.total_count", to_string(deletes.total_count));
 	}
 
 	D_ASSERT(current_delete_manifest == delete_manifests.end());
@@ -506,7 +507,6 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	if (delete_data) {
 		D_ASSERT(iceberg_global_state.file_row_number_idx.IsValid());
 		auto &file_row_number_column = chunk.data[iceberg_global_state.file_row_number_idx.GetIndex()];
-
 		delete_data->Apply(chunk, file_row_number_column);
 	}
 }
