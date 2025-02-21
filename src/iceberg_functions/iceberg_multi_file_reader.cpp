@@ -104,12 +104,12 @@ string IcebergMultiFileList::GetFile(idx_t file_id) {
 			}
 			auto &manifest = *current_data_manifest;
 			reader_state = ManifestEntryReaderState(*manifest);
-			current_data_manifest++;
 		}
 
 		auto new_entry = data_manifest_entry_reader->GetNext(reader_state);
 		if (!new_entry) {
 			D_ASSERT(reader_state.finished);
+			current_data_manifest++;
 			continue;
 		}
 		if (new_entry->status == IcebergManifestEntryStatusType::DELETED) {
@@ -453,12 +453,12 @@ void IcebergMultiFileList::ProcessDeletes() const {
 		if (reader_state.finished) {
 			auto &manifest = *current_delete_manifest;
 			reader_state = ManifestEntryReaderState(*manifest);
-			current_delete_manifest++;
 		}
 
 		auto new_entry = delete_manifest_entry_reader->GetNext(reader_state);
 		if (!new_entry) {
 			D_ASSERT(reader_state.finished);
+			current_delete_manifest++;
 			continue;
 		}
 		if (new_entry->status == IcebergManifestEntryStatusType::DELETED) {
