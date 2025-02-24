@@ -82,18 +82,22 @@ public:
 
 		SelectionVector result {count};
 		idx_t selection_idx = 0;
+		//! Check for every input tuple if it's valid
+		
 		for (idx_t i = 0; i < count && valid_idx < total_count; i++) {
-			if (starting_row_id + i == valid_rows[valid_idx]) {
-				result[selection_idx++] = i;
+			auto current_row_id = row_ids[data.sel->get_index(i)];
+			if (current_row_id == valid_rows[valid_idx]) {
+				result.set_index(selection_idx++, i);
 				valid_idx++;
 			}
 		}
 
-		if (valid_idx >= total_count && !temp_invalid_rows.empty() && starting_row_id + count > *temp_invalid_rows.rbegin()) {
+		auto highest_row_id = row_ids[data.sel->get_index(count - 1)] + 1;
+		if (valid_idx >= total_count && !temp_invalid_rows.empty() && highest_row_id > *temp_invalid_rows.rbegin()) {
 			//! The deletes have only told us what the highest deleted row is
 			//! But anything after that is valid and can't be ignored.
 			auto last_invalid_row = *temp_invalid_rows.rbegin();
-			auto valid_range = (starting_row_id + count) - (last_invalid_row + 1);
+			auto valid_range = highest_row_id - (last_invalid_row + 1);
 			auto i = count - valid_range;
 
 			for (; i < count; i++) {
