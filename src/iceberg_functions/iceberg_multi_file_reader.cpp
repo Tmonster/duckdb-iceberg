@@ -212,19 +212,19 @@ bool IcebergMultiFileList::FileMatchesFilter(IcebergManifestEntry &file) {
 		bool result = true;
 		switch (constant_filter.comparison_type) {
 		case ExpressionType::COMPARE_EQUAL:
-			result = (constant_value >= lower_bound && constant_value <= upper_bound);
+			result = constant_value >= lower_bound && constant_value <= upper_bound;
 			break;
 		case ExpressionType::COMPARE_GREATERTHAN:
-			result = (constant_value <= upper_bound);
+			result = constant_value <= upper_bound;
 			break;
 		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			result = (constant_value <= upper_bound);
+			result = constant_value <= upper_bound;
 			break;
 		case ExpressionType::COMPARE_LESSTHAN:
-			result = (constant_value >= lower_bound);
+			result = constant_value >= lower_bound;
 			break;
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			result = (constant_value >= lower_bound);
+			result = constant_value >= lower_bound;
 			break;
 		default:
 			// For other types of comparisons, we can't make a decision based on bounds
@@ -273,6 +273,7 @@ string IcebergMultiFileList::GetFile(idx_t file_id) {
 
 			for (auto &entry : intermediate_entries) {
 				if (!FileMatchesFilter(entry)) {
+					DUCKDB_LOG_INFO(context, "duckdb.Extensions.Iceberg", "Iceberg Filter Pushdown, skipped 'data_file': '%s'", entry.file_path);
 					//! Skip this file
 					continue;
 				}
