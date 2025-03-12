@@ -72,6 +72,7 @@ select * from my_datalake.default.table_more_deletes order by all;
 query I
 SELECT message FROM duckdb_logs where type='iceberg.Catalog.Curl.HTTPRequest' order by timestamp
 ----
+POST http://127.0.0.1:8181/v1/oauth/tokens (curl code 'No error')
 GET http://127.0.0.1:8181/v1/namespaces (curl code 'No error')
 GET http://127.0.0.1:8181/v1/namespaces/default/tables (curl code 'No error')
 GET http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned (curl code 'No error')
