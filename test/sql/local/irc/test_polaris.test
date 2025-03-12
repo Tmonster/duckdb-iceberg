@@ -1,0 +1,27 @@
+
+require httpfs
+
+require iceberg
+
+require aws
+
+mode skip
+
+statement ok
+create secret polaris_secret (
+  type s3,
+  KEY_ID 'c1afe0044f87ea17',
+  SECRET 'a65907eb154abc7184d66cca48da91f3'
+);
+
+
+statement ok
+attach 'quickstart_catalog' as my_datalake (
+    type ICEBERG,
+    ENDPOINT 'http://0.0.0.0:8181/api/catalog'
+)
+
+
+statement ok
+show all tables;
+

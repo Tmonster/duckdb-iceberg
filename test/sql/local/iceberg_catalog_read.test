@@ -11,6 +11,12 @@ require parquet
 require httpfs
 
 statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
 CREATE SECRET (
     TYPE S3,
     KEY_ID 'admin',
@@ -62,6 +68,16 @@ select * from my_datalake.default.table_more_deletes order by all;
 2023-03-10	10	j
 2023-03-11	11	k
 2023-03-12	12	l
+
+query I
+SELECT message FROM duckdb_logs where type='iceberg.Catalog.Curl.HTTPRequest' order by timestamp
+----
+GET http://127.0.0.1:8181/v1/namespaces (curl code 'No error')
+GET http://127.0.0.1:8181/v1/namespaces/default/tables (curl code 'No error')
+GET http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned (curl code 'No error')
+GET http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned (curl code 'No error')
+GET http://127.0.0.1:8181/v1/namespaces/default/tables/table_more_deletes (curl code 'No error')
+GET http://127.0.0.1:8181/v1/namespaces/default/tables/table_more_deletes (curl code 'No error')
 
 statement error
 select * from my_datalake.default.pyspark_iceberg_table_v2;

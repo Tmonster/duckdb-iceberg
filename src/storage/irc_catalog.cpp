@@ -44,6 +44,9 @@ optional_ptr<SchemaCatalogEntry> IRCatalog::GetSchema(CatalogTransaction transac
                                                       OnEntryNotFound if_not_found, QueryErrorContext error_context) {
 	if (schema_name == DEFAULT_SCHEMA) {
 		if (default_schema.empty()) {
+			if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+				return nullptr;
+			}
 			throw InvalidInputException("Attempting to fetch the default schema - but no database was "
 			                             "provided in the connection string");
 		}
@@ -53,6 +56,7 @@ optional_ptr<SchemaCatalogEntry> IRCatalog::GetSchema(CatalogTransaction transac
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw BinderException("Schema with name \"%s\" not found", schema_name);
 	}
+
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
 }
 

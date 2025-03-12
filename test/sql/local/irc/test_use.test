@@ -12,23 +12,36 @@ require httpfs
 
 require aws
 
-mode skip
-
 statement ok
-CREATE SECRET glue_secret (
+CREATE SECRET local_catalog_secret (
     TYPE S3,
-    PROVIDER credential_chain,
-    CHAIN 'sts',
-    ASSUME_ROLE_ARN 'arn:aws:iam::840140254803:role/pyiceberg-etl-role',
-    REGION 'us-east-1'
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
 );
 
 statement ok
-attach '840140254803:s3tablescatalog:pyiceberg-blog-bucket' as my_datalake (
+ATTACH '' AS my_datalake (
     TYPE ICEBERG,
-    SECRET 'glue_secret',
-    ENDPOINT_TYPE 'GLUE'
+    ENDPOINT 'http://127.0.0.1:8181'
 );
 
 statement ok
+use my_datalake.default;
+
+# need catalog and schema name for use.
+statement error
 use my_datalake;
+----
+Catalog Error
+
+# even after showing all tables. use statement needs catalog + schema.
+statement ok
+show all tables;
+
+statement error
+use my_datalake;
+----
+Catalog Error

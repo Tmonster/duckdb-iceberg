@@ -1,0 +1,56 @@
+# name: test/sql/cloud/irc/test_use.test
+# description: test use
+# group: [iceberg]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require-env AWS_DEFAULT_REGION
+
+require-env AWS_ACCESS_KEY_ID
+
+require-env AWS_SECRET_ACCESS_KEY
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require aws
+
+statement ok
+CREATE SECRET glue_secret (
+    TYPE S3,
+    PROVIDER credential_chain,
+    CHAIN 'sts',
+    ASSUME_ROLE_ARN 'arn:aws:iam::840140254803:role/pyiceberg-etl-role',
+    REGION 'us-east-1'
+);
+
+statement ok
+attach '840140254803:s3tablescatalog/pyiceberg-blog-bucket' as glue_lake (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE'
+);
+
+statement ok
+use glue_lake.myblognamespace;
+
+statement error
+use glue_lake;
+----
+Catalog Error
+
+statement error
+use glue_secret;
+----
+Catalog Error
+
+# even after showing all tables. use statement needs catalog + schema.
+statement ok
+show all tables;
+
+statement error
+use glue_lake;
+----
+Catalog Error

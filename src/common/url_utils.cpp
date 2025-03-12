@@ -44,7 +44,11 @@ std::string IRCEndpointBuilder::GetURL() const {
 	if (!version.empty()) {
 		ret = ret + "/" + version;
 	}
-	if (!prefix.empty()) {
+	// usually the warehouse is the prefix.
+	if (prefix.empty() && !warehouse.empty()) {
+		ret = ret + "/" + warehouse;
+	}
+	else if (!prefix.empty()) {
 		ret = ret + "/" + prefix;
 	}
 	for (auto &component : path_components) {

@@ -29,10 +29,10 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 	for (const auto &named_param : input.options) {
 		auto lower_name = StringUtil::Lower(named_param.first);
 
-		if (lower_name == "client_id" || 
-				lower_name == "client_secret" ||
-				lower_name == "endpoint" ||
-				lower_name == "aws_region") {
+		if (lower_name == "key_id" ||
+		    lower_name == "secret" ||
+		    lower_name == "endpoint" ||
+		    lower_name == "aws_region") {
 			result->secret_map[lower_name] = named_param.second.ToString();
 		} else {
 			throw InternalException("Unknown named parameter passed to CreateIRCSecretFunction: " + lower_name);
@@ -42,9 +42,9 @@ static unique_ptr<BaseSecret> CreateCatalogSecretFunction(ClientContext &context
 	// Get token from catalog
 	result->secret_map["token"] = IRCAPI::GetToken(
 		context,
-		result->secret_map["client_id"].ToString(), 
-		result->secret_map["client_secret"].ToString(),
-		result->secret_map["endpoint"].ToString());
+	    result->secret_map["key_id"].ToString(),
+	    result->secret_map["secret"].ToString(),
+	    result->secret_map["endpoint"].ToString());
 	
 	//! Set redact keys
 	result->redact_keys = {"token", "client_id", "client_secret"};
@@ -124,22 +124,28 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 	}
 
 	// Default IRC path
-	string connection_string = info.path;
 	Value endpoint_val;
 	// Lookup a secret we can use to access the rest catalog.
 	// if no secret is referenced, this throw
 	auto secret_entry = IRCatalog::GetSecret(context, secret_name);
-	if (secret_entry) {
- 		// secret found - read data
- 		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
- 		string new_connection_info;
-
- 		Value token_val = kv_secret.TryGetValue("token");
- 		credentials.token = token_val.IsNull() ? "" : token_val.ToString();
-
- 		Value aws_region_val = kv_secret.TryGetValue("aws_region");
- 		credentials.aws_region = endpoint_val.IsNull() ? "" : aws_region_val.ToString();
- 	}
+	if (!secret_entry) {
+		throw IOException("No secret found to use with catalog " + name);
+	}
+ 	// secret found - read data
+ 	const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+	Value key_val = kv_secret.TryGetValue("key_id");
+	Value secret_val = kv_secret.TryGetValue("secret");
+	CreateSecretInput create_secret_input;
+	create_secret_input.options["key_id"] = key_val;
+	create_secret_input.options["secret"] = secret_val;
+	create_secret_input.options["endpoint"] = endpoint;
+	auto new_secret = CreateCatalogSecretFunction(context, create_secret_input);
+	auto &kv_secret_new = dynamic_cast<KeyValueSecret &>(*new_secret);
+	Value token = kv_secret_new.TryGetValue("token");
+	if (token.IsNull()) {
+		throw IOException("Failed to generate oath token");
+	}
+	credentials.token = token.ToString();
 	auto catalog = make_uniq<IRCatalog>(db, access_mode, credentials);
 	catalog->host = endpoint;
 	catalog->warehouse = warehouse;

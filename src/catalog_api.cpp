@@ -169,6 +169,10 @@ static string GetAwsRegion(const string host) {
 static string GetRequestAws(ClientContext &context, IRCEndpointBuilder endpoint_builder, const string &secret_name) {
 	auto clientConfig = make_uniq<Aws::Client::ClientConfiguration>();
 
+	if (!SELECTED_CURL_CERT_PATH.empty()) {
+		clientConfig->caFile = SELECTED_CURL_CERT_PATH;
+	}
+
 	std::shared_ptr<Aws::Http::HttpClientFactory> MyClientFactory;
 	std::shared_ptr<Aws::Http::HttpClient> MyHttpClient;
 
@@ -224,6 +228,7 @@ static string GetRequestAws(ClientContext &context, IRCEndpointBuilder endpoint_
 	signer->SignRequest(*req);
 	std::shared_ptr<Aws::Http::HttpResponse> res = MyHttpClient->MakeRequest(req);
 	Aws::Http::HttpResponseCode resCode = res->GetResponseCode();
+	DUCKDB_LOG_DEBUG(context, "iceberg.Catalog.Aws.HTTPRequest", "GET %s (response %d) (signed with key_id '%s' for service '%s', in region '%s')", uri.GetURIString(), resCode, kv_secret.secret_map["key_id"].GetValue<string>(), service.c_str(), region.c_str());
 	if (resCode == Aws::Http::HttpResponseCode::OK) {
 		Aws::StringStream resBody;
 		resBody << res->GetResponseBody().rdbuf();
@@ -259,6 +264,7 @@ static string GetRequest(ClientContext &context, const IRCEndpointBuilder &endpo
 		res = curl_easy_perform(curl);
 		curl_easy_cleanup(curl);
 
+		DUCKDB_LOG_DEBUG(context, "iceberg.Catalog.Curl.HTTPRequest", "GET %s (curl code '%s')", url, curl_easy_strerror(res));
 		if (res != CURLcode::CURLE_OK) {
 			string error = curl_easy_strerror(res);
 			throw IOException("Curl Request to '%s' failed with error: '%s'", url, error);
@@ -270,6 +276,7 @@ static string GetRequest(ClientContext &context, const IRCEndpointBuilder &endpo
 }
 
 static string PostRequest(
+		ClientContext &context,
 		const string &url, 
 		const string &post_data, 
 		const string &content_type = "x-www-form-urlencoded",
@@ -311,6 +318,7 @@ static string PostRequest(
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 
+	DUCKDB_LOG_DEBUG(context, "iceberg.Catalog.Curl.HTTPRequest", "POST %s (curl code '%s')", url, curl_easy_strerror(res));
 	if (res != CURLcode::CURLE_OK) {
 		string error = curl_easy_strerror(res);
 		throw IOException("Curl Request to '%s' failed with error: '%s'", url, error);
@@ -388,7 +396,7 @@ IRCAPITableCredentials IRCAPI::GetTableCredentials(ClientContext &context, const
 
 string IRCAPI::GetToken(ClientContext &context, string id, string secret, string endpoint) {
 	string post_data = "grant_type=client_credentials&client_id=" + id + "&client_secret=" + secret + "&scope=PRINCIPAL_ROLE:ALL";
-	string api_result = PostRequest(endpoint + "/v1/oauth/tokens", post_data);
+	string api_result = PostRequest(context, endpoint + "/v1/oauth/tokens", post_data);
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(api_result_to_doc(api_result));
 	auto *root = yyjson_doc_get_root(doc.get());
 	return TryGetStrFromObject(root, "access_token");
