@@ -2,6 +2,12 @@
 # description: test integration with iceberg catalog read
 # group: [irc]
 
+require-env POLARIS_CLIENT_ID
+
+require-env POLARIS_CLIENT_SECRET
+
+require-env POLARIS_SERVER_AVAILABLE
+
 require avro
 
 require parquet
@@ -12,17 +18,15 @@ require iceberg
 
 require aws
 
-mode skip
-
 statement ok
 create secret polaris_secret (
-  type s3,
-  KEY_ID '',
-  SECRET ''
+  TYPE S3,
+  KEY_ID '${POLARIS_CLIENT_ID}',
+  SECRET '${POLARIS_CLIENT_SECRET}'
 );
 
 statement ok
-attach 'polaris_demo' as my_datalake (
+attach 'quickstart_catalog' as my_datalake (
     type ICEBERG,
     ENDPOINT 'http://0.0.0.0:8181/api/catalog'
 );
@@ -30,9 +34,15 @@ attach 'polaris_demo' as my_datalake (
 statement ok
 show all tables;
 
-query II
-select * from namespace.catalog.table;
+query I
+select count(*) from (show all tables);
 ----
 1
-2
+
+query II
+select * from my_datalake.COLLADO_TEST.quickstart_table;
+----
+1	some data
+2	more data
+3	yet more data
 
