@@ -74,12 +74,12 @@ jobs:
         uses: hendrikmuhs/ccache-action@main
         continue-on-error: true
 
-      - name: Build extension
-        env:
-          GEN: ninja
-          STATIC_LIBCPP: 1
-        run: |
-          make release
+#      - name: Build extension
+#        env:
+#          GEN: ninja
+#          STATIC_LIBCPP: 1
+#        run: |
+#          make release
 
       - name: Set up for Polaris
         run: |
@@ -89,15 +89,13 @@ jobs:
           # install python virtual environment (is this needed?)
           sudo apt-get install -y -qq python3-venv
 
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-
       - name: Setup Jenv
         run: |
           git clone https://github.com/jenv/jenv.git ~/.jenv
           echo 'export PATH="$HOME/.jenv/bin:$PATH"' >> ~/.bashrc
           echo 'eval "$(jenv init -)"' >> ~/.bashrc
           source ~/.bashrc
+          eval "$(jenv init -)"
           ~/.jenv/bin/jenv enable-plugin export
           ~/.jenv/bin/jenv add /usr/lib/jvm/java-21-openjdk-amd64
 
@@ -136,10 +134,13 @@ jobs:
           export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
           python3 scripts/polaris/create_data.py
 
-      - name: Test with rest catalog
-        env:
-          POLARIS_SERVER_AVAILABLE: 1
-        run: |
-          export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
-          export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
-          make test_release
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+
+#      - name: Test with rest catalog
+#        env:
+#          POLARIS_SERVER_AVAILABLE: 1
+#        run: |
+#          export POLARIS_CLIENT_ID=$(cat polaris_client_id.txt)
+#          export POLARIS_CLIENT_SECRET=$(cat polaris_client_secret.txt)
+#          make test_release
