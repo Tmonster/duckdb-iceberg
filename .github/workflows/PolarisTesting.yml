@@ -101,12 +101,16 @@ jobs:
           export PATH="$HOME/.jenv/bin:$PATH"
           eval "$(jenv init -)"
           echo "called jenv init"
-          ~/.jenv/bin/jenv enable-plugin export
-          ~/.jenv/bin/jenv add /usr/lib/jvm/java-21-openjdk-amd64
+          jenv enable-plugin export
+          jenv add /usr/lib/jvm/java-21-openjdk-amd64
 
       - name: Wait for polaris initialization
         run: |
-          source ~/.bashrc
+          export PATH="$HOME/.jenv/bin:$PATH"
+          eval "$(jenv init -)"
+          echo "called jenv init"
+          jenv enable-plugin export
+          jenv add /usr/lib/jvm/java-21-openjdk-amd64
           make setup_polaris
           # let polaris initialize 
           max_attempts=50
