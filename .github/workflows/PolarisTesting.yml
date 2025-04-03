@@ -60,10 +60,10 @@ jobs:
 #          sudo apt-get remove -y cmake cmake-data
 #          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
 #
-#      - uses: actions/checkout@v4
-#        with:
-#          fetch-depth: 0
-#          submodules: 'true'
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
 #
 #      - name: Setup vcpkg
 #        uses: lukka/run-vcpkg@v11.1
@@ -108,9 +108,7 @@ jobs:
         run: |
           export PATH="$HOME/.jenv/bin:$PATH"
           eval "$(jenv init -)"
-          echo "called jenv init"
-          jenv enable-plugin export
-          jenv add /usr/lib/jvm/java-21-openjdk-amd64
+
           make setup_polaris
           # let polaris initialize 
           max_attempts=50
