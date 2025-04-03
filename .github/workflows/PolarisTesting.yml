@@ -89,26 +89,25 @@ jobs:
           # install python virtual environment (is this needed?)
           sudo apt-get install -y -qq python3-venv
 
-      - name: Setup Jenv
-        run: |
-          git clone https://github.com/jenv/jenv.git ~/.jenv
-          echo "done cloning"
-          echo 'export PATH="$HOME/.jenv/bin:$PATH"' >> ~/.bashrc
-          echo "export called"
-          echo 'eval "$(jenv init -)"' >> ~/.bashrc
-          echo "cat into bashrc done"
-          echo "now calling export and eval in shell"
-          export PATH="$HOME/.jenv/bin:$PATH"
-          eval "$(jenv init -)"
-          echo "called jenv init"
-          jenv enable-plugin export
-          jenv add /usr/lib/jvm/java-21-openjdk-amd64
+#      - name: Setup Jenv
+#        run: |
+#          git clone https://github.com/jenv/jenv.git ~/.jenv
+#          echo "done cloning"
+#          echo 'export PATH="$HOME/.jenv/bin:$PATH"' >> ~/.bashrc
+#          echo "export called"
+#          echo 'eval "$(jenv init -)"' >> ~/.bashrc
+#          echo "cat into bashrc done"
+#          echo "now calling export and eval in shell"
+#          export PATH="$HOME/.jenv/bin:$PATH"
+#          eval "$(jenv init -)"
+#          echo "called jenv init"
+#          jenv enable-plugin export
+#          jenv add /usr/lib/jvm/java-21-openjdk-amd64
 
       - name: Wait for polaris initialization
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64
         run: |
-          export PATH="$HOME/.jenv/bin:$PATH"
-          eval "$(jenv init -)"
-
           make setup_polaris
           # let polaris initialize 
           max_attempts=50
