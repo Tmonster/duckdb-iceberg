@@ -94,8 +94,11 @@ jobs:
           git clone https://github.com/jenv/jenv.git ~/.jenv
           echo "done cloning"
           echo 'export PATH="$HOME/.jenv/bin:$PATH"' >> ~/.bashrc
+          echo "export called"
           echo 'eval "$(jenv init -)"' >> ~/.bashrc
+          echo "cat into bashrc done"
           eval "$(jenv init -)"
+          echo "called jenv init"
           ~/.jenv/bin/jenv enable-plugin export
           ~/.jenv/bin/jenv add /usr/lib/jvm/java-21-openjdk-amd64
 
