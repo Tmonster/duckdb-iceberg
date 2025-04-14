@@ -159,7 +159,7 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 			break;
 		}
 		default:
-			throw InternalException("Endpoint type (%s) not implemented", endpoint_type_string);
+			throw InvalidInputException("Endpoint type (%s) not implemented", endpoint_type_string);
 		}
 	}
 
@@ -186,7 +186,7 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 		break;
 	}
 	default:
-		throw InternalException("Authorization Type (%s) not implemented", authorization_type_string);
+		throw InvalidInputException("Authorization Type (%s) not implemented", authorization_type_string);
 	}
 
 	//! We throw if there are any additional options not handled by previous steps

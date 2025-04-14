@@ -196,7 +196,7 @@ LogicalType ICUtils::TypeToLogicalType(ClientContext &context, const string &typ
 
 LogicalType ICUtils::ToICType(const LogicalType &input) {
 	// todo do we need this mapping?
-	throw NotImplementedException("ToUCType not yet implemented");
+	throw NotImplementedException("ToICType not yet implemented");
 	switch (input.id()) {
 	case LogicalTypeId::BOOLEAN:
 	case LogicalTypeId::SMALLINT:
