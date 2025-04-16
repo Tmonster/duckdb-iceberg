@@ -161,8 +161,24 @@ idx_t IcebergMultiFileList::GetTotalFileCount() {
 	return data_files.size();
 }
 
+idx_t IcebergMultiFileList::GetTotalCardinality() {
+	// FIXME: the 'added_files_count' + the 'existing_files_count'
+	// in the Manifest List should give us this information without scanning the manifest list
+	idx_t i = data_files.size();
+	idx_t cardinality = 0;
+	)
+	return data_files.size();
+}
+
 unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &context) {
-	auto total_file_count = IcebergMultiFileList::GetTotalFileCount();
+	idx_t i = 0;
+	// OpenFileInfo *some_info = GetFile(i);
+	while (some_info != nullptr) {
+		// parse NodeStatisticsInfo from the open_file_info
+		i++;
+	}
+
+	// combine all the NodeStatisticsInfo.
 
 	if (total_file_count == 0) {
 		return make_uniq<NodeStatistics>(0, 0);
