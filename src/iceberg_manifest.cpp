@@ -206,6 +206,8 @@ idx_t IcebergManifestEntryV2::ProduceEntries(DataChunk &chunk, idx_t offset, idx
 	auto file_path = FlatVector::GetData<string_t>(*child_entries[file_path_idx.GetChildIndex(0).GetPrimaryIndex()]);
 	auto file_format = FlatVector::GetData<string_t>(*child_entries[name_to_vec.at("file_format").GetChildIndex(0).GetPrimaryIndex()]);
 	auto record_count = FlatVector::GetData<int64_t>(*child_entries[name_to_vec.at("record_count").GetChildIndex(0).GetPrimaryIndex()]);
+	auto value_counts = FlatVector::GetData<int64_t>(*child_entries[name_to_vec.at("value_counts").GetChildIndex(0).GetPrimaryIndex()]);
+
 	optional_ptr<Vector> lower_bounds;
 	optional_ptr<Vector> upper_bounds;
 

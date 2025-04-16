@@ -127,7 +127,7 @@ unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientCont
 	}
 	auto filterstmp = combiner.GenerateTableScanFilters(info.column_indexes);
 
-	auto filtered_list = make_uniq<IcebergMultiFileList>(context, paths[0], this->options);
+	auto filtered_list = make_uniq<IcebergMultiFileList>(context, paths[0].path, this->options);
 	filtered_list->table_filters = std::move(filterstmp);
 	filtered_list->names = names;
 
@@ -161,29 +161,34 @@ idx_t IcebergMultiFileList::GetTotalFileCount() {
 	return data_files.size();
 }
 
-idx_t IcebergMultiFileList::GetTotalCardinality() {
-	// FIXME: the 'added_files_count' + the 'existing_files_count'
-	// in the Manifest List should give us this information without scanning the manifest list
-	idx_t i = data_files.size();
-	idx_t cardinality = 0;
-	)
-	return data_files.size();
-}
+// idx_t IcebergMultiFileList::GetTotalCardinality() {
+// 	// FIXME: the 'added_files_count' + the 'existing_files_count'
+// 	// in the Manifest List should give us this information without scanning the manifest list
+// 	idx_t i = data_files.size();
+// 	idx_t cardinality = 0;
+// 	)
+// 	return data_files.size();
+// }
 
 unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &context) {
-	idx_t i = 0;
-	// OpenFileInfo *some_info = GetFile(i);
-	while (some_info != nullptr) {
-		// parse NodeStatisticsInfo from the open_file_info
+	auto blah = data_manifests;
+	idx_t i = data_files.size();
+	while (!GetFile(i).path.empty()) {
 		i++;
 	}
 
-	// combine all the NodeStatisticsInfo.
+	idx_t cardinality = 0;
+	for (idx_t data_file_index = 0; data_file_index < data_files.size(); data_file_index++) {
+		auto data_file = data_files[data_file_index];
+		if (data_file.content == IcebergManifestEntryContentType::DATA) {
+			cardinality += data_files[data_file_index].record_count;
+		} else if (data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
+			cardinality -= data_files[data_file_index].record_count;
+		}
+		// ignore equality deletes for now.
 
-	if (total_file_count == 0) {
-		return make_uniq<NodeStatistics>(0, 0);
 	}
-
+	return make_uniq<NodeStatistics>(cardinality, cardinality);
 	// FIXME: visit metadata to get a cardinality count
 
 	return nullptr;
@@ -255,7 +260,7 @@ bool IcebergMultiFileList::FileMatchesFilter(IcebergManifestEntry &file) {
 	return true;
 }
 
-string IcebergMultiFileList::GetFile(idx_t file_id) {
+OpenFileInfo IcebergMultiFileList::GetFile(idx_t file_id) {
 	if (!initialized) {
 		InitializeFiles();
 	}
