@@ -99,6 +99,8 @@ public:
 	string file_path;
 	string file_format;
 	int64_t record_count;
+	unordered_map<int32_t, string> lower_bounds;
+	unordered_map<int32_t, string> upper_bounds;
 
 public:
 	void Print() {

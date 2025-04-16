@@ -71,6 +71,7 @@ public:
 	void ProcessDeletes() const;
 
 protected:
+	bool FileMatchesFilter(IcebergManifestEntry &file);
 	//! Get the i-th expanded file
 	OpenFileInfo GetFile(idx_t i) override;
 	// TODO: How to guarantee we only call this after the filter pushdown?
