@@ -1,2 +1,0 @@
-ALTER TABLE iceberg_catalog.many_adds_deletes
-ALTER COLUMN schema_evol_added_col_1 TYPE BIGINT;
