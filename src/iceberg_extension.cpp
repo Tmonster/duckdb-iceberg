@@ -235,6 +235,11 @@ static void LoadInternal(DatabaseInstance &instance) {
 		throw MissingExtensionException("The iceberg extension requires the parquet extension to be loaded!");
 	}
 
+	ExtensionHelper::AutoLoadExtension(instance, "avro");
+	if (!instance.ExtensionIsLoaded("avro")) {
+		throw MissingExtensionException("The iceberg extension requires the avro extension to be loaded!");
+	}
+
 	auto &config = DBConfig::GetConfig(instance);
 
 	config.AddExtensionOption("unsafe_enable_version_guessing",
