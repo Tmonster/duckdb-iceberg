@@ -8,6 +8,5 @@ set l_orderkey_bool=NULL,
     l_partkey_time=NULL,
     l_commitdate_timestamp=NULL,
     l_commitdate_timestamp_tz=NULL,
-    l_comment_string=NULL,
     l_comment_blob=NULL
 where l_partkey_int % 2 = 0;

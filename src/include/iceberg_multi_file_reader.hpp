@@ -69,6 +69,7 @@ public:
 	void ScanDeleteFile(const string &delete_file_path) const;
 	unique_ptr<IcebergDeleteData> GetDeletesForFile(const string &file_path) const;
 	void ProcessDeletes() const;
+	void ReadDeletes();
 
 protected:
 	bool FileMatchesFilter(IcebergManifestEntry &file);
@@ -93,6 +94,7 @@ public:
 	manifest_reader_manifest_entry_producer entry_producer = nullptr;
 
 	vector<IcebergManifestEntry> data_files;
+	vector<IcebergManifestEntry> delete_files;
 	vector<IcebergManifest> data_manifests;
 	vector<IcebergManifest> delete_manifests;
 	vector<IcebergManifest>::iterator current_data_manifest;

@@ -4,7 +4,7 @@ import os
 PARQUET_SRC_FILE = os.getenv('PARQUET_SRC_FILE')
 
 duckdb_con = duckdb.connect()
-duckdb_con.execute("call dbgen(sf=0.01)")
+duckdb_con.execute("call dbgen(sf=0.001)")
 duckdb_con.query(
     """CREATE VIEW test_table as
                     SELECT

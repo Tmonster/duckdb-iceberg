@@ -38,7 +38,8 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<string
 template <bool LOWER_BOUND = true>
 [[noreturn]] static void ThrowBoundError(const string &bound, IcebergColumnDefinition &column) {
 	auto bound_type = LOWER_BOUND ? "'lower_bound'" : "'upper_bound'";
-	throw InvalidInputException("Invalid %s size (%d) for column %s with type '%s', bound value: '%s'", bound_type, bound.size(), column.name, column.type.ToString(), bound);
+	throw InvalidInputException("Invalid %s size (%d) for column %s with type '%s', bound value: '%s'", bound_type,
+	                            bound.size(), column.name, column.type.ToString(), bound);
 }
 
 template <bool LOWER_BOUND = true>
@@ -73,7 +74,8 @@ static Value DeserializeBound(const string &bound_value, IcebergColumnDefinition
 		return Value::DATE(date);
 	}
 	case LogicalTypeId::TIMESTAMP: {
-		if (bound_value.size() != sizeof(int64_t)) { // Timestamps are typically stored as int64 (microseconds since epoch)
+		if (bound_value.size() !=
+		    sizeof(int64_t)) { // Timestamps are typically stored as int64 (microseconds since epoch)
 			ThrowBoundError<LOWER_BOUND>(bound_value, column);
 		}
 		int64_t micros_since_epoch;
@@ -171,22 +173,25 @@ idx_t IcebergMultiFileList::GetTotalFileCount() {
 // }
 
 unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &context) {
-	auto blah = data_manifests;
+	// read all files
 	idx_t i = data_files.size();
 	while (!GetFile(i).path.empty()) {
 		i++;
 	}
+	// read deletes as well.
+	ReadDeletes();
 
+	// check the manifests
 	idx_t cardinality = 0;
 	for (idx_t data_file_index = 0; data_file_index < data_files.size(); data_file_index++) {
 		auto data_file = data_files[data_file_index];
-		if (data_file.content == IcebergManifestEntryContentType::DATA) {
-			cardinality += data_files[data_file_index].record_count;
-		} else if (data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
-			cardinality -= data_files[data_file_index].record_count;
-		}
+		D_ASSERT(data_file.content == IcebergManifestEntryContentType::DATA);
+		cardinality += data_files[data_file_index].record_count;
 		// ignore equality deletes for now.
-
+	}
+	for (idx_t delete_file_index = 0; delete_file_index < delete_files.size(); delete_file_index++) {
+		auto delete_file = delete_files[delete_file_index];
+		cardinality -= delete_file.record_count;
 	}
 	return make_uniq<NodeStatistics>(cardinality, cardinality);
 	// FIXME: visit metadata to get a cardinality count
@@ -286,24 +291,30 @@ OpenFileInfo IcebergMultiFileList::GetFile(idx_t file_id) {
 
 		idx_t remaining = (file_id + 1) - data_files.size();
 		if (!table_filters.filters.empty()) {
-			// FIXME: push down the filter into the 'read_avro' scan, so the entries that don't match are just filtered out
+			// FIXME: push down the filter into the 'read_avro' scan, so the entries that don't match are just filtered
+			// out
 			vector<IcebergManifestEntry> intermediate_entries;
-			data_manifest_entry_reader->ReadEntries(remaining, [&intermediate_entries, &entry_producer](DataChunk &chunk, idx_t offset, idx_t count, const ManifestReaderInput &input) {
-				return entry_producer(chunk, offset, count, input, intermediate_entries);
-			});
+			data_manifest_entry_reader->ReadEntries(
+			    remaining, [&intermediate_entries, &entry_producer](DataChunk &chunk, idx_t offset, idx_t count,
+			                                                        const ManifestReaderInput &input) {
+				    return entry_producer(chunk, offset, count, input, intermediate_entries);
+			    });
 
 			for (auto &entry : intermediate_entries) {
 				if (!FileMatchesFilter(entry)) {
-					DUCKDB_LOG_INFO(context, "duckdb.Extensions.Iceberg", "Iceberg Filter Pushdown, skipped 'data_file': '%s'", entry.file_path);
+					DUCKDB_LOG_INFO(context, "duckdb.Extensions.Iceberg",
+					                "Iceberg Filter Pushdown, skipped 'data_file': '%s'", entry.file_path);
 					//! Skip this file
 					continue;
 				}
 				data_files.push_back(entry);
 			}
 		} else {
-			data_manifest_entry_reader->ReadEntries(remaining, [&data_files, &entry_producer](DataChunk &chunk, idx_t offset, idx_t count, const ManifestReaderInput &input) {
-				return entry_producer(chunk, offset, count, input, data_files);
-			});
+			data_manifest_entry_reader->ReadEntries(
+			    remaining, [&data_files, &entry_producer](DataChunk &chunk, idx_t offset, idx_t count,
+			                                              const ManifestReaderInput &input) {
+				    return entry_producer(chunk, offset, count, input, data_files);
+			    });
 		}
 
 		if (data_manifest_entry_reader->Finished()) {
@@ -607,6 +618,59 @@ unique_ptr<IcebergDeleteData> IcebergMultiFileList::GetDeletesForFile(const stri
 	return nullptr;
 }
 
+void IcebergMultiFileList::ReadDeletes() {
+	// In <=v2 we now have to process *all* delete manifests
+	// before we can be certain that we have all the delete data for the current file.
+
+	// v3 solves this, `referenced_data_file` will tell us which file the `data_file`
+	// is targeting before we open it, and there can only be one deletion vector per data file.
+
+	// From the spec: "At most one deletion vector is allowed per data file in a snapshot"
+
+	auto iceberg_path = GetPath();
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto &entry_producer = this->entry_producer;
+	auto &delete_files = this->delete_files;
+
+	while (current_delete_manifest != delete_manifests.end()) {
+		if (delete_manifest_entry_reader->Finished()) {
+			if (current_delete_manifest == delete_manifests.end()) {
+				break;
+			}
+			auto &manifest = *current_delete_manifest;
+			auto manifest_entry_full_path = options.allow_moved_paths
+			                                    ? IcebergUtils::GetFullPath(iceberg_path, manifest.manifest_path, fs)
+			                                    : manifest.manifest_path;
+			auto scan = make_uniq<AvroScan>("IcebergManifest", context, manifest_entry_full_path);
+			delete_manifest_entry_reader->Initialize(std::move(scan));
+		}
+
+		delete_manifest_entry_reader->ReadEntries(
+		    STANDARD_VECTOR_SIZE, [&delete_files, &entry_producer](DataChunk &chunk, idx_t offset, idx_t count,
+		                                                           const ManifestReaderInput &input) {
+			    return entry_producer(chunk, offset, count, input, delete_files);
+		    });
+
+		if (delete_manifest_entry_reader->Finished()) {
+			current_delete_manifest++;
+			continue;
+		}
+	}
+
+#ifdef DEBUG
+	for (auto &entry : data_files) {
+		D_ASSERT(entry.content == IcebergManifestEntryContentType::DATA);
+		D_ASSERT(entry.status != IcebergManifestEntryStatusType::DELETED);
+	}
+#endif
+
+	//	for (auto &entry : delete_files) {
+	//		ScanDeleteFile(entry.file_path);
+	//	}
+
+	D_ASSERT(current_delete_manifest == delete_manifests.end());
+}
+
 void IcebergMultiFileList::ProcessDeletes() const {
 	// In <=v2 we now have to process *all* delete manifests
 	// before we can be certain that we have all the delete data for the current file.
@@ -619,7 +683,7 @@ void IcebergMultiFileList::ProcessDeletes() const {
 	auto iceberg_path = GetPath();
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto &entry_producer = this->entry_producer;
-
+	//	auto &delete_files = this->delete_files;
 	vector<IcebergManifestEntry> delete_files;
 	while (current_delete_manifest != delete_manifests.end()) {
 		if (delete_manifest_entry_reader->Finished()) {
