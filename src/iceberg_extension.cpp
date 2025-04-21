@@ -213,6 +213,12 @@ static unique_ptr<Catalog> IcebergCatalogAttach(StorageExtensionInfo *storage_in
 	D_ASSERT(auth_handler);
 	auto catalog = make_uniq<IRCatalog>(db, access_mode, std::move(auth_handler), attach_options.warehouse,
 	                                    attach_options.endpoint);
+
+	auto pin_snapshot = attach_options.options.find(string("pin_shapshot"));
+	// if (!pin_snapshot->second.IsNull()) {
+	Printer::Print(("pin snapshot true"));
+	catalog->pin_snapshot = true;
+	// }
 	catalog->GetConfig(context);
 	return std::move(catalog);
 }

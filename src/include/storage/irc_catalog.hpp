@@ -51,6 +51,8 @@ public:
 	//! optional prefix
 	string prefix;
 
+	bool pin_snapshot;
+
 public:
 	void Initialize(bool load_builtin) override;
 

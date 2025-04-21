@@ -26,9 +26,16 @@ static string GetTableMetadata(ClientContext &context, IRCatalog &catalog, const
 	url.AddPathComponent(table);
 
 	request_input.AddHeader("X-Iceberg-Access-Delegation: vended-credentials");
+	Printer::Print("checking cached value " + url.GetURL());
+	if (catalog.pin_snapshot && catalog.HasCachedValue(url.GetURL())) {
+		Printer::Print(("skipping get table metadata for " + url.GetURL()));
+		return catalog.GetCachedValue(url.GetURL());
+	}
+
 	string api_result = catalog.auth_handler->GetRequest(context, url, request_input);
 
 	catalog.SetCachedValue(url.GetURL(), api_result);
+	Printer::Print("Setting cached value " + url.GetURL());
 	return api_result;
 }
 

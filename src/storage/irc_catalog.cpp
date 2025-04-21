@@ -19,7 +19,7 @@ namespace duckdb {
 IRCatalog::IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
                      const string &warehouse, const string &uri, const string &version)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), warehouse(warehouse), uri(uri),
-      version(version), schemas(*this) {
+      version(version), pin_snapshot(true), schemas(*this) {
 	if (version.empty()) {
 		throw InternalException("version can not be empty");
 	}
@@ -234,9 +234,11 @@ bool IRCatalog::HasCachedValue(string url) const {
 	if (value != metadata_cache.end()) {
 		auto now = std::chrono::system_clock::now();
 		if (now < value->second->expires_at) {
+			Printer::Print("found cached value for '" + url + "'");
 			return true;
 		}
 	}
+	Printer::Print("No cached value for '" + url + "'");
 	return false;
 }
 
@@ -254,18 +256,28 @@ string IRCatalog::GetCachedValue(string url) const {
 bool IRCatalog::SetCachedValue(string url, string value) {
 	std::unique_ptr<yyjson_doc, YyjsonDocDeleter> doc(ICUtils::api_result_to_doc(value));
 	auto *root = yyjson_doc_get_root(doc.get());
-	auto *credentials = yyjson_obj_get(root, "config");
-	auto credential_size = yyjson_obj_size(credentials);
-	if (credentials && credential_size > 0) {
+
+	bool has_vended_credentials = true;
+	if (StringUtil::StartsWith(uri, "s3tables")) {
+		has_vended_credentials = false;
+	}
+
+	unique_ptr<MetadataCacheValue> val = nullptr;
+	if (has_vended_credentials) {
+		auto *credentials = yyjson_obj_get(root, "config");
 		auto expires_at = IcebergUtils::TryGetStrFromObject(credentials, "s3.session-token-expires-at-ms", false);
-		if (expires_at == "") {
-			return false;
-		}
 		auto epochMillis = std::stoll(expires_at);
 		auto expired_time = std::chrono::system_clock::time_point(std::chrono::milliseconds(epochMillis));
-		auto val = make_uniq<MetadataCacheValue>(value, expired_time);
-		metadata_cache[url] = std::move(val);
+		val = make_uniq<MetadataCacheValue>(value, expired_time);
+	} else {
+		// no vended credentials, but you should still keep track of the things.
+		auto expired_time = std::chrono::system_clock::now() + std::chrono::hours(3600);
+		val = make_uniq<MetadataCacheValue>(value, expired_time);
 	}
+	D_ASSERT(val);
+
+	Printer::Print("Stored cached value for url " + url);
+	metadata_cache[url] = std::move(val);
 	return false;
 }
 
