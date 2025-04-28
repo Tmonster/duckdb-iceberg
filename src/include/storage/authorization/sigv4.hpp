@@ -15,7 +15,7 @@ public:
 public:
 	static unique_ptr<IRCAuthorization> FromAttachOptions(IcebergAttachOptions &input);
 	string GetRequest(ClientContext &context, const IRCEndpointBuilder &endpoint_builder,
-	                  curl_slist *extra_headers) override;
+	                  RequestInput &request_input) override;
 
 public:
 	string secret;

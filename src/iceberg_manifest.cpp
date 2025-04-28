@@ -1,5 +1,7 @@
 #include "manifest_reader.hpp"
 #include "iceberg_manifest.hpp"
+#include "iceberg_extension.hpp"
+#include "duckdb/main/extension_helper.hpp"
 #include "duckdb/main/database.hpp"
 
 //! Iceberg Manifest scan routines
@@ -273,6 +275,8 @@ void IcebergManifestEntryV2::PopulateNameMapping(idx_t column_id, const LogicalT
 
 AvroScan::AvroScan(const string &scan_name, ClientContext &context, const string &path) : context(context) {
 	auto &instance = DatabaseInstance::GetDatabase(context);
+	ExtensionHelper::AutoLoadExtension(instance, "avro");
+
 	auto &avro_scan_entry = ExtensionUtil::GetTableFunction(instance, "read_avro");
 	avro_scan = avro_scan_entry.functions.functions[0];
 
