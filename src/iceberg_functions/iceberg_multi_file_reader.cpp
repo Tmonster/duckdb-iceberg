@@ -122,18 +122,19 @@ unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientCont
 		//! Already performed filter pushdown
 		return nullptr;
 	}
-
-	FilterCombiner combiner(context);
-	for (const auto &filter : filters) {
-		combiner.AddFilter(filter->Copy());
-	}
-	auto filterstmp = combiner.GenerateTableScanFilters(info.column_indexes);
-
-	auto filtered_list = make_uniq<IcebergMultiFileList>(context, paths[0].path, this->options);
-	filtered_list->table_filters = std::move(filterstmp);
-	filtered_list->names = names;
-
-	return std::move(filtered_list);
+	return nullptr;
+	//
+	// FilterCombiner combiner(context);
+	// for (const auto &filter : filters) {
+	// 	combiner.AddFilter(filter->Copy());
+	// }
+	// auto filterstmp = combiner.GenerateTableScanFilters(info.column_indexes);
+	//
+	// auto filtered_list = make_uniq<IcebergMultiFileList>(context, paths[0].path, this->options);
+	// filtered_list->table_filters = std::move(filterstmp);
+	// filtered_list->names = names;
+	//
+	// return std::move(filtered_list);
 }
 
 vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() {
@@ -163,40 +164,18 @@ idx_t IcebergMultiFileList::GetTotalFileCount() {
 	return data_files.size();
 }
 
-// idx_t IcebergMultiFileList::GetTotalCardinality() {
-// 	// FIXME: the 'added_files_count' + the 'existing_files_count'
-// 	// in the Manifest List should give us this information without scanning the manifest list
-// 	idx_t i = data_files.size();
-// 	idx_t cardinality = 0;
-// 	)
-// 	return data_files.size();
-// }
-
 unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &context) {
-	// read all files
-	idx_t i = data_files.size();
-	while (!GetFile(i).path.empty()) {
-		i++;
-	}
-	// read deletes as well.
-	ReadDeletes();
 
 	// check the manifests
 	idx_t cardinality = 0;
-	for (idx_t data_file_index = 0; data_file_index < data_files.size(); data_file_index++) {
-		auto data_file = data_files[data_file_index];
-		D_ASSERT(data_file.content == IcebergManifestEntryContentType::DATA);
-		cardinality += data_files[data_file_index].record_count;
-		// ignore equality deletes for now.
+	for (idx_t data_manifest_idx = 0; data_manifest_idx < data_manifests.size(); data_manifest_idx++) {
+		cardinality += data_manifests[data_manifest_idx].added_rows_count;
 	}
-	for (idx_t delete_file_index = 0; delete_file_index < delete_files.size(); delete_file_index++) {
-		auto delete_file = delete_files[delete_file_index];
-		cardinality -= delete_file.record_count;
+	for (idx_t delete_manifest_idx = 0; delete_manifest_idx < delete_manifests.size(); delete_manifest_idx++) {
+		cardinality -= delete_manifests[delete_manifest_idx].added_rows_count;
 	}
-	return make_uniq<NodeStatistics>(cardinality, cardinality);
-	// FIXME: visit metadata to get a cardinality count
 
-	return nullptr;
+	return make_uniq<NodeStatistics>(cardinality, cardinality);
 }
 
 bool IcebergMultiFileList::FileMatchesFilter(IcebergManifestEntry &file) {
@@ -383,8 +362,8 @@ void IcebergMultiFileList::InitializeFiles() {
 		                                                       IcebergManifestEntryV1::VerifySchema);
 		delete_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV1::PopulateNameMapping,
 		                                                         IcebergManifestEntryV1::VerifySchema);
-		delete_manifest_entry_reader->skip_deleted = true;
 		data_manifest_entry_reader->skip_deleted = true;
+		delete_manifest_entry_reader->skip_deleted = true;
 		manifest_reader =
 		    make_uniq<ManifestReader>(IcebergManifestV1::PopulateNameMapping, IcebergManifestV1::VerifySchema);
 
@@ -395,8 +374,9 @@ void IcebergMultiFileList::InitializeFiles() {
 		                                                       IcebergManifestEntryV2::VerifySchema);
 		delete_manifest_entry_reader = make_uniq<ManifestReader>(IcebergManifestEntryV2::PopulateNameMapping,
 		                                                         IcebergManifestEntryV2::VerifySchema);
-		delete_manifest_entry_reader->skip_deleted = true;
+
 		data_manifest_entry_reader->skip_deleted = true;
+		delete_manifest_entry_reader->skip_deleted = true;
 		manifest_reader =
 		    make_uniq<ManifestReader>(IcebergManifestV2::PopulateNameMapping, IcebergManifestV2::VerifySchema);
 
@@ -511,7 +491,7 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 	                              global_state);
 	D_ASSERT(global_state);
 	// Get the metadata for this file
-	const auto &multi_file_list = dynamic_cast<const IcebergMultiFileList &>(*global_state->file_list);
+	auto &multi_file_list = dynamic_cast<const IcebergMultiFileList &>(*global_state->file_list);
 	auto &reader = *reader_data.reader;
 	auto file_id = reader.file_list_idx.GetIndex();
 	auto &data_file = multi_file_list.data_files[file_id];
@@ -618,59 +598,6 @@ unique_ptr<IcebergDeleteData> IcebergMultiFileList::GetDeletesForFile(const stri
 	return nullptr;
 }
 
-void IcebergMultiFileList::ReadDeletes() {
-	// In <=v2 we now have to process *all* delete manifests
-	// before we can be certain that we have all the delete data for the current file.
-
-	// v3 solves this, `referenced_data_file` will tell us which file the `data_file`
-	// is targeting before we open it, and there can only be one deletion vector per data file.
-
-	// From the spec: "At most one deletion vector is allowed per data file in a snapshot"
-
-	auto iceberg_path = GetPath();
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto &entry_producer = this->entry_producer;
-	auto &delete_files = this->delete_files;
-
-	while (current_delete_manifest != delete_manifests.end()) {
-		if (delete_manifest_entry_reader->Finished()) {
-			if (current_delete_manifest == delete_manifests.end()) {
-				break;
-			}
-			auto &manifest = *current_delete_manifest;
-			auto manifest_entry_full_path = options.allow_moved_paths
-			                                    ? IcebergUtils::GetFullPath(iceberg_path, manifest.manifest_path, fs)
-			                                    : manifest.manifest_path;
-			auto scan = make_uniq<AvroScan>("IcebergManifest", context, manifest_entry_full_path);
-			delete_manifest_entry_reader->Initialize(std::move(scan));
-		}
-
-		delete_manifest_entry_reader->ReadEntries(
-		    STANDARD_VECTOR_SIZE, [&delete_files, &entry_producer](DataChunk &chunk, idx_t offset, idx_t count,
-		                                                           const ManifestReaderInput &input) {
-			    return entry_producer(chunk, offset, count, input, delete_files);
-		    });
-
-		if (delete_manifest_entry_reader->Finished()) {
-			current_delete_manifest++;
-			continue;
-		}
-	}
-
-#ifdef DEBUG
-	for (auto &entry : data_files) {
-		D_ASSERT(entry.content == IcebergManifestEntryContentType::DATA);
-		D_ASSERT(entry.status != IcebergManifestEntryStatusType::DELETED);
-	}
-#endif
-
-	//	for (auto &entry : delete_files) {
-	//		ScanDeleteFile(entry.file_path);
-	//	}
-
-	D_ASSERT(current_delete_manifest == delete_manifests.end());
-}
-
 void IcebergMultiFileList::ProcessDeletes() const {
 	// In <=v2 we now have to process *all* delete manifests
 	// before we can be certain that we have all the delete data for the current file.
@@ -683,8 +610,8 @@ void IcebergMultiFileList::ProcessDeletes() const {
 	auto iceberg_path = GetPath();
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto &entry_producer = this->entry_producer;
-	//	auto &delete_files = this->delete_files;
 	vector<IcebergManifestEntry> delete_files;
+
 	while (current_delete_manifest != delete_manifests.end()) {
 		if (delete_manifest_entry_reader->Finished()) {
 			if (current_delete_manifest == delete_manifests.end()) {
@@ -708,6 +635,10 @@ void IcebergMultiFileList::ProcessDeletes() const {
 			current_delete_manifest++;
 			continue;
 		}
+	}
+
+	if (current_delete_manifest != delete_manifests.end()) {
+		ProcessDeletes();
 	}
 
 #ifdef DEBUG

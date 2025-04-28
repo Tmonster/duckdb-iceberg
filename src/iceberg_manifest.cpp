@@ -50,6 +50,8 @@ idx_t IcebergManifestV2::ProduceEntries(DataChunk &chunk, idx_t offset, idx_t co
 	auto content = FlatVector::GetData<int32_t>(chunk.data[name_to_vec.at("content").GetPrimaryIndex()]);
 	auto sequence_number =
 	    FlatVector::GetData<int64_t>(chunk.data[name_to_vec.at("sequence_number").GetPrimaryIndex()]);
+	auto added_rows_count =
+	    FlatVector::GetData<int64_t>(chunk.data[name_to_vec.at("added_rows_count").GetPrimaryIndex()]);
 
 	for (idx_t i = 0; i < count; i++) {
 		idx_t index = i + offset;
@@ -58,6 +60,7 @@ idx_t IcebergManifestV2::ProduceEntries(DataChunk &chunk, idx_t offset, idx_t co
 		manifest.manifest_path = manifest_path[index].GetString();
 		manifest.content = IcebergManifestContentType(content[index]);
 		manifest.sequence_number = sequence_number[index];
+		manifest.added_rows_count = added_rows_count[index];
 
 		result.push_back(manifest);
 	}
@@ -244,13 +247,15 @@ idx_t IcebergManifestEntryV2::ProduceEntries(DataChunk &chunk, idx_t offset, idx
 		entry.file_format = file_format[index].GetString();
 		entry.record_count = record_count[index];
 
-		if (lower_bounds && upper_bounds) {
-			entry.lower_bounds = GetBounds(*lower_bounds, index);
-			entry.upper_bounds = GetBounds(*upper_bounds, index);
-		}
-
 		if (entry.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
 			throw NotImplementedException("Support for equality deletes is not added yet");
+		}
+
+		if (entry.content != IcebergManifestEntryContentType::POSITION_DELETES) {
+			if (lower_bounds && upper_bounds) {
+				entry.lower_bounds = GetBounds(*lower_bounds, index);
+				entry.upper_bounds = GetBounds(*upper_bounds, index);
+			}
 		}
 		produced++;
 		result.push_back(entry);
