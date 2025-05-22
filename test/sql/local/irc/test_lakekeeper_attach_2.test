@@ -1,0 +1,30 @@
+# name: test/sql/local/irc/test_lakekeeper.test
+# group: [irc]
+
+require httpfs
+
+require avro
+
+require parquet
+
+require iceberg
+
+require-env LAKEKEEPER_SERVER_AVAILABLE
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+attach 'demo' as my_datalake (
+	type ICEBERG,
+	ENDPOINT 'http://localhost:8181/catalog',
+    CLIENT_ID 'spark',
+    CLIENT_SECRET '2OR3eRvYfSZzzZ16MlPd95jhLnOaLM52',
+    OAUTH2_SCOPE 'lakekeeper',
+    OAUTH2_SERVER_URI 'http://localhost:30080/realms/iceberg/protocol/openid-connect/token'
+);
+
+query III
+select * from my_datalake.my_namespace.my_table;
+----
+1	a-string	2.2
