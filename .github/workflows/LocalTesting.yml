@@ -81,6 +81,7 @@ jobs:
       - name: Build extension
         env:
           GEN: ninja
+          VCPKG_TARGET_TRIPLET: x64-linux-release
           STATIC_LIBCPP: 1
         run: |
           make release
