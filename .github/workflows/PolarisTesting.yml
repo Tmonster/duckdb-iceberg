@@ -15,6 +15,7 @@ jobs:
     name: Test against Polaris Catalog
     runs-on: ubuntu-latest
     env:
+      VCPKG_FEATURE_FLAGS: "-binarycaching"
       VCPKG_TARGET_TRIPLET: 'x64-linux'
       GEN: ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
@@ -62,7 +63,7 @@ jobs:
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
         with:
-          vcpkgGitCommitId: 5e5d0e1cd7785623065e77eff011afdeec1a3574
+          vcpkgGitCommitId: ce613c41372b23b1f51333815feb3edd87ef8a8b
 
       - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@main
@@ -71,6 +72,7 @@ jobs:
       - name: Build extension
         env:
           GEN: ninja
+          VCPKG_TARGET_TRIPLET: x64-linux-release
           STATIC_LIBCPP: 1
         run: |
           make release
