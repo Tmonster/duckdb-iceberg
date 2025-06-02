@@ -15,6 +15,7 @@ jobs:
     name: Test against Polaris Catalog
     runs-on: ubuntu-latest
     env:
+      VCPKG_FEATURE_FLAGS: "-binarycaching"
       VCPKG_TARGET_TRIPLET: 'x64-linux'
       GEN: ninja
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
