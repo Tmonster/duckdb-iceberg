@@ -42,10 +42,10 @@ public:
 	                                            const string &table_name);
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
+	void FillEntry(ClientContext &context, IcebergTableInformation &table, optional_ptr<BoundAtClause> at = nullptr);
 
 protected:
 	void LoadEntries(ClientContext &context);
-	void FillEntry(ClientContext &context, IcebergTableInformation &table);
 
 protected:
 	IRCSchemaEntry &schema;

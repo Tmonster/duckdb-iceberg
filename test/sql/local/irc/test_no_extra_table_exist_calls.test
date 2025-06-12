@@ -66,8 +66,6 @@ http://127.0.0.1:8181/v1/namespaces	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
 
-mode output_result
-
 query III
 select * from my_datalake.default.table_unpartitioned order by all;
 ----
@@ -93,19 +91,46 @@ http://127.0.0.1:8181/v1/namespaces/default/tables	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
 
+statement ok
+select * from my_datalake.default.pyspark_iceberg_table_v2;
 
-# show all tables will clear the schema set cache and reload schemas
-#
-# statement ok
-# show all tables;
-#
-# # show all tables forces calls to list namespaces again
-# query II
-# select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
-# ----
-# http://127.0.0.1:8181/v1/namespaces	GET
-# http://127.0.0.1:8181/v1/namespaces/default/tables	GET
-# http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
-# http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
-# http://127.0.0.1:8181/v1/namespaces	GET
-# http://127.0.0.1:8181/v1/namespaces/default/tables	GET
+query II
+select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+----
+http://127.0.0.1:8181/v1/namespaces	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
+
+statement ok
+SET VARIABLE snapshot_id = (
+    select snapshot_id::BIGINT
+    from iceberg_snapshots(my_datalake.default.pyspark_iceberg_table_v2)
+    where sequence_number = 4
+);
+
+# Query the IRC again when getting all snapshot information
+query II
+select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+----
+http://127.0.0.1:8181/v1/namespaces	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
+
+statement ok
+select * from my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => getvariable('snapshot_id'));
+
+# since we already have snapshot id in our cache, we do not need to request from the irc again
+query II
+select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+----
+http://127.0.0.1:8181/v1/namespaces	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
+http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET

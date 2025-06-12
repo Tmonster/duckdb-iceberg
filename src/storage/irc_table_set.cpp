@@ -202,8 +202,18 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_pt
 ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
 }
 
-void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
+void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table, optional_ptr<BoundAtClause> at) {
+	if (at) {
+		auto break_here = 0;
+	}
+	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 
+	if (!snapshot_lookup.IsLatest()) {
+		// means we already have the requested snapshot_id in our schema information, no need to call the irc again
+		return;
+	}
+
+	// if we don't recognize the snapshot lookup, load table information again.
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	table.load_table_result = IRCAPI::GetTable(context, ic_catalog, schema.name, table.name);
 	table.table_metadata = IcebergTableMetadata::FromTableMetadata(table.load_table_result.metadata);
@@ -256,7 +266,7 @@ optional_ptr<CatalogEntry> ICTableSet::GetEntry(ClientContext &context, const En
 		}
 	}
 
-	FillEntry(context, entry->second);
+	FillEntry(context, entry->second, lookup.GetAtClause());
 	return entry->second.GetSchemaVersion(lookup.GetAtClause());
 }
 
