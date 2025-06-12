@@ -203,10 +203,6 @@ ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.
 }
 
 void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
-	if (!table.schema_versions.empty()) {
-		//! Already filled
-		return;
-	}
 
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	table.load_table_result = IRCAPI::GetTable(context, ic_catalog, schema.name, table.name);
@@ -232,10 +228,6 @@ void ICTableSet::Scan(ClientContext &context, const std::function<void(CatalogEn
 }
 
 void ICTableSet::LoadEntries(ClientContext &context) {
-	if (!entries.empty()) {
-		return;
-	}
-
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	// TODO: handle out-of-order columns using position property
 	auto tables = IRCAPI::GetTables(context, ic_catalog, schema.name);
@@ -251,12 +243,19 @@ unique_ptr<ICTableInfo> ICTableSet::GetTableInfo(ClientContext &context, IRCSche
 }
 
 optional_ptr<CatalogEntry> ICTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
-	LoadEntries(context);
 	lock_guard<mutex> l(entry_lock);
+	// first see if the table exists
 	auto entry = entries.find(lookup.GetEntryName());
 	if (entry == entries.end()) {
-		return nullptr;
+		// if we didn't find it, load all entries again and try and find it
+		LoadEntries(context);
+		entry = entries.find(lookup.GetEntryName());
+		// if entry is STILL null, then return null pointer
+		if (entry == entries.end()) {
+			return nullptr;
+		}
 	}
+
 	FillEntry(context, entry->second);
 	return entry->second.GetSchemaVersion(lookup.GetAtClause());
 }

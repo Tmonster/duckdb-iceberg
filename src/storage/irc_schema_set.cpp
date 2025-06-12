@@ -29,8 +29,8 @@ void IRCSchemaSet::Scan(ClientContext &context, const std::function<void(Catalog
 	}
 }
 
-void IRCSchemaSet::LoadEntries(ClientContext &context) {
-	if (!entries.empty()) {
+void IRCSchemaSet::LoadEntries(ClientContext &context, bool force_load) {
+	if (!entries.empty() && !force_load) {
 		return;
 	}
 

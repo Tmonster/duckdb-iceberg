@@ -74,6 +74,10 @@ public:
 	bool InMemory() override;
 	string GetDBPath() override;
 
+	IRCSchemaSet &GetSchemas() {
+		return schemas;
+	}
+
 public:
 	AccessMode access_mode;
 	unique_ptr<IRCAuthorization> auth_handler;
@@ -94,6 +98,8 @@ private:
 
 	std::mutex metadata_cache_mutex;
 	unordered_map<string, unique_ptr<MetadataCacheValue>> metadata_cache;
+
+	IRCSchemaSet schemas;
 };
 
 } // namespace duckdb

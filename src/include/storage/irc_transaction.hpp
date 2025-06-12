@@ -24,12 +24,6 @@ public:
 	AccessMode GetAccessMode() const {
 		return access_mode;
 	}
-	IRCSchemaSet &GetSchemas() {
-		return schemas;
-	}
-
-public:
-	IRCSchemaSet schemas;
 
 private:
 	IRCTransactionState transaction_state;

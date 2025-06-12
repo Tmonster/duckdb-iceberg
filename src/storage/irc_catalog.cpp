@@ -26,7 +26,7 @@ namespace duckdb {
 IRCatalog::IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
                      IcebergAttachOptions &attach_options, const string &version)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
-      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version(version) {
+      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version(version), schemas(*this) {
 	if (version.empty()) {
 		throw InternalException("version can not be empty");
 	}
@@ -42,17 +42,15 @@ void IRCatalog::Initialize(bool load_builtin) {
 }
 
 void IRCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {
-	auto &transaction = IRCTransaction::Get(context, *this);
-	auto &schemas = transaction.GetSchemas();
+	// auto &transaction = IRCTransaction::Get(context, *this);
+	// auto &schemas = transaction.GetSchemas();
+	// this is called from show tables or show all schemas. In this case, clear the entries first.
 	schemas.Scan(context, [&](CatalogEntry &schema) { callback(schema.Cast<IRCSchemaEntry>()); });
 }
 
 optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction transaction,
                                                          const EntryLookupInfo &schema_lookup,
                                                          OnEntryNotFound if_not_found) {
-	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
-	auto &schemas = irc_transaction.GetSchemas();
-
 	auto &schema_name = schema_lookup.GetEntryName();
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {

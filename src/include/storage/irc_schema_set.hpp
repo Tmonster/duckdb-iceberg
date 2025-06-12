@@ -11,7 +11,7 @@ public:
 	explicit IRCSchemaSet(Catalog &catalog);
 
 public:
-	void LoadEntries(ClientContext &context);
+	void LoadEntries(ClientContext &context, bool force_load = false);
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 
