@@ -73,6 +73,7 @@ public:
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
+	IRCSchemaSet &GetSchemas();
 
 public:
 	AccessMode access_mode;
@@ -94,6 +95,8 @@ private:
 
 	std::mutex metadata_cache_mutex;
 	unordered_map<string, unique_ptr<MetadataCacheValue>> metadata_cache;
+
+	IRCSchemaSet schemas;
 };
 
 } // namespace duckdb

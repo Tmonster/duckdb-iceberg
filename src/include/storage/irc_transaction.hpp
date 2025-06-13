@@ -24,16 +24,28 @@ public:
 	AccessMode GetAccessMode() const {
 		return access_mode;
 	}
-	IRCSchemaSet &GetSchemas() {
+	optional_ptr<IRCSchemaSet> GetSchemas() {
 		return schemas;
+	}
+	void UpdateSchemaTable(string schema_name, string table_name) {
+		lock_guard<mutex> l(updated_schemas_lock);
+		auto qualified_name = schema_name + "." + table_name;
+		updated_schemas_tables.insert(qualified_name);
+	}
+	bool SchemaTableHasBeenUpdated(string schema_name, string table_name) {
+		lock_guard<mutex> l(updated_schemas_lock);
+		auto qualified_name = schema_name + "." + table_name;
+		return updated_schemas_tables.find(qualified_name) != updated_schemas_tables.end();
 	}
 
 public:
-	IRCSchemaSet schemas;
+	optional_ptr<IRCSchemaSet> schemas;
+	case_insensitive_set_t updated_schemas_tables;
 
-private:
 	IRCTransactionState transaction_state;
 	AccessMode access_mode;
+
+	mutex updated_schemas_lock;
 };
 
 } // namespace duckdb

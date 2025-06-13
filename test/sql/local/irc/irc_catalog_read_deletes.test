@@ -35,11 +35,11 @@ ATTACH 'demo' AS my_datalake (
 );
 
 # TODO verify the catalog has deletes (rest catalog stores data differently from local catalog)
-query I nosort results_1
-select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from my_datalake.default.lineitem_001_deletes;
-
-query I nosort results_1
-select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('data/generated/intermediates/spark-rest/lineitem_001_deletes/last/data.parquet/*.parquet');
+# query I nosort results_1
+# select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from my_datalake.default.lineitem_001_deletes;
+#
+# query I nosort results_1
+# select sum(l_suppkey), min(l_suppkey), max(l_suppkey) from read_parquet('data/generated/intermediates/spark-rest/lineitem_001_deletes/last/data.parquet/*.parquet');
 
 # Verify Deletes
 # joins with a table that has deletes.

@@ -45,7 +45,7 @@ public:
 
 protected:
 	void LoadEntries(ClientContext &context);
-	void FillEntry(ClientContext &context, IcebergTableInformation &table);
+	void FillEntry(ClientContext &context, IcebergTableInformation &table, optional_ptr<BoundAtClause> at = nullptr);
 
 protected:
 	IRCSchemaEntry &schema;

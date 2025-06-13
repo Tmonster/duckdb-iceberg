@@ -202,15 +202,21 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_pt
 ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
 }
 
-void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table) {
-	if (!table.schema_versions.empty()) {
-		//! Already filled
+void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table, optional_ptr<BoundAtClause> at) {
+
+	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
+	auto &irc_transaction = IRCTransaction::Get(context, catalog);
+	auto table_name = table.name;
+	if (!snapshot_lookup.IsLatest() || irc_transaction.SchemaTableHasBeenUpdated(table.schema.name, table.name)) {
+		// we either have the requested snapshot_id in our schema information
+		// or we have already requested the most up to date version of this table in the current transaction
 		return;
 	}
 
 	auto &ic_catalog = catalog.Cast<IRCatalog>();
 	table.load_table_result = IRCAPI::GetTable(context, ic_catalog, schema.name, table.name);
 	table.table_metadata = IcebergTableMetadata::FromTableMetadata(table.load_table_result.metadata);
+	irc_transaction.UpdateSchemaTable(table.schema.name, table.name);
 	auto &schemas = table.table_metadata.schemas;
 
 	//! It should be impossible to have a metadata file without any schema
@@ -251,13 +257,20 @@ unique_ptr<ICTableInfo> ICTableSet::GetTableInfo(ClientContext &context, IRCSche
 }
 
 optional_ptr<CatalogEntry> ICTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
-	LoadEntries(context);
 	lock_guard<mutex> l(entry_lock);
+	// first see if the table exists
 	auto entry = entries.find(lookup.GetEntryName());
 	if (entry == entries.end()) {
-		return nullptr;
+		// if we didn't find it, load all entries again and try and find it
+		LoadEntries(context);
+		entry = entries.find(lookup.GetEntryName());
+		// if entry is STILL null, then return null pointer
+		if (entry == entries.end()) {
+			return nullptr;
+		}
 	}
-	FillEntry(context, entry->second);
+
+	FillEntry(context, entry->second, lookup.GetAtClause());
 	return entry->second.GetSchemaVersion(lookup.GetAtClause());
 }
 

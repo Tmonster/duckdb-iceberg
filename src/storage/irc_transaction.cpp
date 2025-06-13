@@ -7,14 +7,16 @@
 namespace duckdb {
 
 IRCTransaction::IRCTransaction(IRCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
-    : Transaction(manager, context), schemas(ic_catalog), access_mode(ic_catalog.access_mode) {
+    : Transaction(manager, context), schemas(ic_catalog.GetSchemas()), access_mode(ic_catalog.access_mode) {
 	//	connection = ICConnection::Open(ic_catalog.path);
+
+	transaction_state = IRCTransactionState::TRANSACTION_NOT_YET_STARTED;
 }
 
 IRCTransaction::~IRCTransaction() = default;
 
 void IRCTransaction::Start() {
-	transaction_state = IRCTransactionState::TRANSACTION_NOT_YET_STARTED;
+	transaction_state = IRCTransactionState::TRANSACTION_STARTED;
 }
 void IRCTransaction::Commit() {
 	if (transaction_state == IRCTransactionState::TRANSACTION_STARTED) {

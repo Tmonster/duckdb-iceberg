@@ -26,7 +26,7 @@ namespace duckdb {
 IRCatalog::IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<IRCAuthorization> auth_handler,
                      IcebergAttachOptions &attach_options, const string &version)
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
-      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version(version) {
+      warehouse(attach_options.warehouse), uri(attach_options.endpoint), version(version), schemas(*this) {
 	if (version.empty()) {
 		throw InternalException("version can not be empty");
 	}
@@ -43,18 +43,18 @@ void IRCatalog::Initialize(bool load_builtin) {
 
 void IRCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {
 	auto &transaction = IRCTransaction::Get(context, *this);
-	auto &schemas = transaction.GetSchemas();
-	schemas.Scan(context, [&](CatalogEntry &schema) { callback(schema.Cast<IRCSchemaEntry>()); });
+	auto transaction_schemas = transaction.GetSchemas();
+	transaction_schemas->Scan(context, [&](CatalogEntry &schema) { callback(schema.Cast<IRCSchemaEntry>()); });
 }
 
 optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction transaction,
                                                          const EntryLookupInfo &schema_lookup,
                                                          OnEntryNotFound if_not_found) {
 	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
-	auto &schemas = irc_transaction.GetSchemas();
+	auto transaction_schemas = irc_transaction.GetSchemas();
 
 	auto &schema_name = schema_lookup.GetEntryName();
-	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name);
+	auto entry = transaction_schemas->GetEntry(transaction.GetContext(), schema_name);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
 	}
@@ -97,6 +97,10 @@ bool IRCatalog::InMemory() {
 
 string IRCatalog::GetDBPath() {
 	return warehouse;
+}
+
+IRCSchemaSet &IRCatalog::GetSchemas() {
+	return schemas;
 }
 
 DatabaseSize IRCatalog::GetDatabaseSize(ClientContext &context) {
