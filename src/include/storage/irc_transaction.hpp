@@ -24,6 +24,16 @@ public:
 	AccessMode GetAccessMode() const {
 		return access_mode;
 	}
+	optional_ptr<IRCSchemaSet> GetSchemas() {
+		return schemas;
+	}
+
+public:
+	optional_ptr<IRCSchemaSet> schemas;
+
+private:
+	IRCTransactionState transaction_state;
+	AccessMode access_mode;
 
 private:
 	IRCTransactionState transaction_state;

@@ -203,12 +203,12 @@ ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.
 }
 
 void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table, optional_ptr<BoundAtClause> at) {
-	if (at) {
-		auto break_here = 0;
-	}
+	// if we are in a transaction, do not use the
+
 	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 
 	if (!snapshot_lookup.IsLatest()) {
+		// TODO: check if we have the snapshot in the load_table_metadata.
 		// means we already have the requested snapshot_id in our schema information, no need to call the irc again
 		return;
 	}

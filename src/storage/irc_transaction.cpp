@@ -8,6 +8,8 @@ namespace duckdb {
 
 IRCTransaction::IRCTransaction(IRCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
     : Transaction(manager, context), access_mode(ic_catalog.access_mode) {
+	// set the transaction schemas to the irc schemas.
+	schemas = ic_catalog.GetSchemas();
 	//	connection = ICConnection::Open(ic_catalog.path);
 }
 

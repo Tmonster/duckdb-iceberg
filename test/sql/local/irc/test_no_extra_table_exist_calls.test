@@ -82,13 +82,13 @@ select * from my_datalake.default.table_unpartitioned order by all;
 2023-03-11	11	k
 2023-03-12	12	l
 
-# now 4 requests to get updated metadata.json information
+statement ok
+pragma truncate_duckdb_logs;
+
+# 1 more requests to get updated metadata.json information
 query II
 select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
 ----
-http://127.0.0.1:8181/v1/namespaces	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
 
 statement ok
@@ -97,9 +97,6 @@ select * from my_datalake.default.pyspark_iceberg_table_v2;
 query II
 select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
 ----
-http://127.0.0.1:8181/v1/namespaces	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
 
@@ -110,13 +107,10 @@ SET VARIABLE snapshot_id = (
     where sequence_number = 4
 );
 
-# Query the IRC again when getting all snapshot information
+# Query the IRC again when getting all snapshot information in the set variable query
 query II
 select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
 ----
-http://127.0.0.1:8181/v1/namespaces	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
 http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
@@ -124,13 +118,10 @@ http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
 statement ok
 select * from my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => getvariable('snapshot_id'));
 
+statement ok
+pragma truncate_duckdb_logs;
+
 # since we already have snapshot id in our cache, we do not need to request from the irc again
 query II
 select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
 ----
-http://127.0.0.1:8181/v1/namespaces	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
-http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET

@@ -42,17 +42,23 @@ void IRCatalog::Initialize(bool load_builtin) {
 }
 
 void IRCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) {
-	// auto &transaction = IRCTransaction::Get(context, *this);
-	// auto &schemas = transaction.GetSchemas();
+	auto &transaction = IRCTransaction::Get(context, *this);
 	// this is called from show tables or show all schemas. In this case, clear the entries first.
 	schemas.Scan(context, [&](CatalogEntry &schema) { callback(schema.Cast<IRCSchemaEntry>()); });
+	transaction.schemas = schemas;
 }
 
 optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction transaction,
                                                          const EntryLookupInfo &schema_lookup,
                                                          OnEntryNotFound if_not_found) {
+	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
+	auto transaction_schemas = irc_transaction.GetSchemas();
+	if (!transaction_schemas) {
+		auto break_here = 0;
+	}
+
 	auto &schema_name = schema_lookup.GetEntryName();
-	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name);
+	auto entry = transaction_schemas->GetEntry(transaction.GetContext(), schema_name);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
 	}
