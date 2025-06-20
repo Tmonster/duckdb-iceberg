@@ -34,10 +34,6 @@ public:
 private:
 	IRCTransactionState transaction_state;
 	AccessMode access_mode;
-
-private:
-	IRCTransactionState transaction_state;
-	AccessMode access_mode;
 };
 
 } // namespace duckdb
