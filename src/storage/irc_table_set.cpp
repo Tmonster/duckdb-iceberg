@@ -202,14 +202,24 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_pt
 ICTableSet::ICTableSet(IRCSchemaEntry &schema) : schema(schema), catalog(schema.ParentCatalog()) {
 }
 
+bool ICTableSet::HaveSnapshotID(IcebergTableInformation &table, IcebergSnapshotLookup &snapshot_lookup) {
+	for (auto &snapshot : table.table_metadata.snapshots) {
+		if (snapshot.first == snapshot_lookup.snapshot_id) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void ICTableSet::FillEntry(ClientContext &context, IcebergTableInformation &table, optional_ptr<BoundAtClause> at) {
 
 	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
 	auto &irc_transaction = IRCTransaction::Get(context, catalog);
 	auto table_name = table.name;
-	if (!snapshot_lookup.IsLatest() || irc_transaction.SchemaTableHasBeenUpdated(table.schema.name, table.name)) {
-		// we either have the requested snapshot_id in our schema information
-		// or we have already requested the most up to date version of this table in the current transaction
+	if ((!snapshot_lookup.IsLatest() && HaveSnapshotID(table, snapshot_lookup)) ||
+	    irc_transaction.SchemaTableHasBeenUpdated(table.schema.name, table.name)) {
+		// if a snapshot id is requested that we have, we do not request the IRC
+		// if we are in a transaction and have already requested this table from the IRC, we do not update
 		return;
 	}
 

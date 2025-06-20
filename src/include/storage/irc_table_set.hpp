@@ -42,6 +42,7 @@ public:
 	                                            const string &table_name);
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
+	bool HaveSnapshotID(IcebergTableInformation &table, IcebergSnapshotLookup &snapshot_lookup);
 
 protected:
 	void LoadEntries(ClientContext &context);
