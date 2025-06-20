@@ -156,8 +156,8 @@ public:
 	vector<LogicalType> types;
 	TableFilterSet table_filters;
 
-	unique_ptr<ManifestFileReader> data_manifest_reader;
-	unique_ptr<ManifestFileReader> delete_manifest_reader;
+	unique_ptr<manifest_file::ManifestFileReader> data_manifest_reader;
+	unique_ptr<manifest_file::ManifestFileReader> delete_manifest_reader;
 
 	vector<IcebergManifestEntry> data_files;
 	vector<IcebergManifest> data_manifests;

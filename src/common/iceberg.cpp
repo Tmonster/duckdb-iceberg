@@ -18,7 +18,7 @@ unique_ptr<IcebergTable> IcebergTable::Load(const string &iceberg_path, const Ic
 	auto ret = make_uniq<IcebergTable>(snapshot);
 	ret->path = iceberg_path;
 
-	auto manifest_file_reader = make_uniq<ManifestFileReader>(metadata.iceberg_version, false);
+	auto manifest_file_reader = make_uniq<manifest_file::ManifestFileReader>(metadata.iceberg_version, false);
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto manifest_list_full_path = options.allow_moved_paths
@@ -27,7 +27,7 @@ unique_ptr<IcebergTable> IcebergTable::Load(const string &iceberg_path, const Ic
 	IcebergManifestList manifest_list(manifest_list_full_path);
 
 	//! Read the manifest list
-	auto manifest_list_reader = make_uniq<ManifestListReader>(metadata.iceberg_version);
+	auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(metadata.iceberg_version);
 	auto scan = make_uniq<AvroScan>("IcebergManifestList", context, manifest_list_full_path);
 	manifest_list_reader->Initialize(std::move(scan));
 	while (!manifest_list_reader->Finished()) {

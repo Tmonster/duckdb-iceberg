@@ -483,8 +483,8 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 	auto &metadata = GetMetadata();
 	auto &fs = FileSystem::GetFileSystem(context);
 
-	data_manifest_reader = make_uniq<ManifestFileReader>(metadata.iceberg_version);
-	delete_manifest_reader = make_uniq<ManifestFileReader>(metadata.iceberg_version);
+	data_manifest_reader = make_uniq<manifest_file::ManifestFileReader>(metadata.iceberg_version);
+	delete_manifest_reader = make_uniq<manifest_file::ManifestFileReader>(metadata.iceberg_version);
 
 	// Read the manifest list, we need all the manifests to determine if we've seen all deletes
 	auto manifest_list_full_path = options.allow_moved_paths
@@ -494,7 +494,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 	IcebergManifestList manifest_list(manifest_list_full_path);
 
 	//! Read the manifest list
-	auto manifest_list_reader = make_uniq<ManifestListReader>(metadata.iceberg_version);
+	auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(metadata.iceberg_version);
 	auto scan = make_uniq<AvroScan>("IcebergManifestList", context, manifest_list_full_path);
 	manifest_list_reader->Initialize(std::move(scan));
 	while (!manifest_list_reader->Finished()) {

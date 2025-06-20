@@ -1,4 +1,5 @@
 #include "manifest_reader.hpp"
+#include "duckdb/common/multi_file/multi_file_states.hpp"
 
 namespace duckdb {
 
@@ -14,15 +15,16 @@ void BaseManifestReader::Initialize(unique_ptr<AvroScan> scan_p) {
 
 	finished = false;
 	offset = 0;
-	name_to_vec.clear();
+	vector_mapping.clear();
 
-	for (idx_t i = 0; i < scan->return_types.size(); i++) {
-		auto &type = scan->return_types[i];
-		auto &name = scan->return_names[i];
-		CreateNameMapping(i, type, name);
+	auto &multi_file_local_state = scan->local_state->Cast<MultiFileLocalState>();
+	auto &columns = multi_file_local_state.reader->columns;
+	for (idx_t i = 0; i < columns.size(); i++) {
+		auto &column = columns[i];
+		CreateVectorMapping(i, column);
 	}
 
-	if (!ValidateNameMapping()) {
+	if (!ValidateVectorMapping()) {
 		throw InvalidInputException("Invalid schema detected in a manifest/manifest entry");
 	}
 }

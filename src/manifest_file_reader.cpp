@@ -2,6 +2,8 @@
 
 namespace duckdb {
 
+namespace manifest_file {
+
 ManifestFileReader::ManifestFileReader(idx_t iceberg_version, bool skip_deleted)
     : BaseManifestReader(iceberg_version), skip_deleted(skip_deleted) {
 }
@@ -33,41 +35,48 @@ idx_t ManifestFileReader::Read(idx_t count, vector<IcebergManifestEntry> &result
 	return total_added;
 }
 
-void ManifestFileReader::CreateNameMapping(idx_t column_id, const LogicalType &type, const string &name) {
-	auto lname = StringUtil::Lower(name);
-	if (lname != "data_file") {
-		name_to_vec[lname] = ColumnIndex(column_id);
+void ManifestFileReader::CreateVectorMapping(idx_t column_id, MultiFileColumnDefinition &column) {
+	if (column.identifier.IsNull()) {
+		throw InvalidConfigurationException("Column '%s' of the manifest list is missing a field_id!", column.name);
+	}
+	D_ASSERT(column.identifier.type().id() == LogicalTypeId::INTEGER);
+
+	auto field_id = column.identifier.GetValue<int32_t>();
+	if (field_id != DATA_FILE) {
+		vector_mapping.emplace(field_id, ColumnIndex(column_id));
 		return;
 	}
 
+	auto &type = column.type;
 	if (type.id() != LogicalTypeId::STRUCT) {
 		throw InvalidInputException("The 'data_file' of the manifest should be a STRUCT");
 	}
-	auto &children = StructType::GetChildTypes(type);
+	auto &children = column.children;
 	for (idx_t child_idx = 0; child_idx < children.size(); child_idx++) {
 		auto &child = children[child_idx];
-		auto child_name = StringUtil::Lower(child.first);
+		D_ASSERT(!child.identifier.IsNull() && child.identifier.type().id() == LogicalTypeId::INTEGER);
+		auto child_field_id = child.identifier.GetValue<int32_t>();
 
-		name_to_vec[child_name] = ColumnIndex(column_id, {ColumnIndex(child_idx)});
+		vector_mapping.emplace(child_field_id, ColumnIndex(column_id, {ColumnIndex(child_idx)}));
 	}
 }
 
-bool ManifestFileReader::ValidateNameMapping() {
-	if (!name_to_vec.count("status")) {
-		return false;
-	}
-	if (!name_to_vec.count("file_path")) {
-		return false;
-	}
-	if (!name_to_vec.count("file_format")) {
-		return false;
-	}
-	if (!name_to_vec.count("record_count")) {
-		return false;
-	}
-	if (iceberg_version > 1) {
-		if (!name_to_vec.count("content")) {
+bool ManifestFileReader::ValidateVectorMapping() {
+	static const int32_t V1_REQUIRED_FIELDS[] = {STATUS, FILE_PATH, FILE_FORMAT, RECORD_COUNT};
+	static const idx_t V1_REQUIRED_FIELDS_SIZE = sizeof(V1_REQUIRED_FIELDS) / sizeof(int32_t);
+	for (idx_t i = 0; i < V1_REQUIRED_FIELDS_SIZE; i++) {
+		if (!vector_mapping.count(V1_REQUIRED_FIELDS[i])) {
 			return false;
+		}
+	}
+
+	static const int32_t V2_REQUIRED_FIELDS[] = {CONTENT};
+	static const idx_t V2_REQUIRED_FIELDS_SIZE = sizeof(V2_REQUIRED_FIELDS) / sizeof(int32_t);
+	if (iceberg_version >= 2) {
+		for (idx_t i = 0; i < V2_REQUIRED_FIELDS_SIZE; i++) {
+			if (!vector_mapping.count(V2_REQUIRED_FIELDS[i])) {
+				return false;
+			}
 		}
 	}
 	return true;
@@ -138,65 +147,65 @@ idx_t ManifestFileReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 	D_ASSERT(offset < chunk.size());
 	D_ASSERT(offset + count <= chunk.size());
 
-	auto status = FlatVector::GetData<int32_t>(chunk.data[name_to_vec.at("status").GetPrimaryIndex()]);
+	auto status = FlatVector::GetData<int32_t>(chunk.data[vector_mapping.at(STATUS).GetPrimaryIndex()]);
 
-	auto file_path_idx = name_to_vec.at("file_path");
+	auto file_path_idx = vector_mapping.at(FILE_PATH);
 	auto data_file_idx = file_path_idx.GetPrimaryIndex();
 	auto &child_entries = StructVector::GetEntries(chunk.data[data_file_idx]);
-	D_ASSERT(name_to_vec.at("file_format").GetPrimaryIndex() == data_file_idx);
-	D_ASSERT(name_to_vec.at("record_count").GetPrimaryIndex() == data_file_idx);
+	D_ASSERT(vector_mapping.at(FILE_FORMAT).GetPrimaryIndex() == data_file_idx);
+	D_ASSERT(vector_mapping.at(RECORD_COUNT).GetPrimaryIndex() == data_file_idx);
 	if (iceberg_version > 1) {
-		D_ASSERT(name_to_vec.at("content").GetPrimaryIndex() == data_file_idx);
+		D_ASSERT(vector_mapping.at(CONTENT).GetPrimaryIndex() == data_file_idx);
 	}
 	optional_ptr<Vector> equality_ids;
 	optional_ptr<Vector> sequence_number;
 	int32_t *content;
 
-	auto partition_idx = name_to_vec.at("partition");
+	auto partition_idx = vector_mapping.at(PARTITION);
 	if (iceberg_version > 1) {
-		auto equality_ids_it = name_to_vec.find("equality_ids");
-		if (equality_ids_it != name_to_vec.end()) {
+		auto equality_ids_it = vector_mapping.find(EQUALITY_IDS);
+		if (equality_ids_it != vector_mapping.end()) {
 			equality_ids = *child_entries[equality_ids_it->second.GetChildIndex(0).GetPrimaryIndex()];
 		}
-		auto sequence_number_it = name_to_vec.find("sequence_number");
-		if (sequence_number_it != name_to_vec.end()) {
+		auto sequence_number_it = vector_mapping.find(SEQUENCE_NUMBER);
+		if (sequence_number_it != vector_mapping.end()) {
 			sequence_number = chunk.data[sequence_number_it->second.GetPrimaryIndex()];
 		}
 		content =
-		    FlatVector::GetData<int32_t>(*child_entries[name_to_vec.at("content").GetChildIndex(0).GetPrimaryIndex()]);
+		    FlatVector::GetData<int32_t>(*child_entries[vector_mapping.at(CONTENT).GetChildIndex(0).GetPrimaryIndex()]);
 	}
 
 	auto file_path = FlatVector::GetData<string_t>(*child_entries[file_path_idx.GetChildIndex(0).GetPrimaryIndex()]);
-	auto file_format =
-	    FlatVector::GetData<string_t>(*child_entries[name_to_vec.at("file_format").GetChildIndex(0).GetPrimaryIndex()]);
-	auto record_count =
-	    FlatVector::GetData<int64_t>(*child_entries[name_to_vec.at("record_count").GetChildIndex(0).GetPrimaryIndex()]);
+	auto file_format = FlatVector::GetData<string_t>(
+	    *child_entries[vector_mapping.at(FILE_FORMAT).GetChildIndex(0).GetPrimaryIndex()]);
+	auto record_count = FlatVector::GetData<int64_t>(
+	    *child_entries[vector_mapping.at(RECORD_COUNT).GetChildIndex(0).GetPrimaryIndex()]);
 	auto file_size_in_bytes = FlatVector::GetData<int64_t>(
-	    *child_entries[name_to_vec.at("file_size_in_bytes").GetChildIndex(0).GetPrimaryIndex()]);
+	    *child_entries[vector_mapping.at(FILE_SIZE_IN_BYTES).GetChildIndex(0).GetPrimaryIndex()]);
 	optional_ptr<Vector> lower_bounds;
 	optional_ptr<Vector> upper_bounds;
 	optional_ptr<Vector> value_counts;
 	optional_ptr<Vector> null_value_counts;
 	optional_ptr<Vector> nan_value_counts;
 
-	auto lower_bounds_it = name_to_vec.find("lower_bounds");
-	if (lower_bounds_it != name_to_vec.end()) {
+	auto lower_bounds_it = vector_mapping.find(LOWER_BOUNDS);
+	if (lower_bounds_it != vector_mapping.end()) {
 		lower_bounds = *child_entries[lower_bounds_it->second.GetChildIndex(0).GetPrimaryIndex()];
 	}
-	auto upper_bounds_it = name_to_vec.find("upper_bounds");
-	if (upper_bounds_it != name_to_vec.end()) {
+	auto upper_bounds_it = vector_mapping.find(UPPER_BOUNDS);
+	if (upper_bounds_it != vector_mapping.end()) {
 		upper_bounds = *child_entries[upper_bounds_it->second.GetChildIndex(0).GetPrimaryIndex()];
 	}
-	auto value_counts_it = name_to_vec.find("value_counts");
-	if (value_counts_it != name_to_vec.end()) {
+	auto value_counts_it = vector_mapping.find(VALUE_COUNTS);
+	if (value_counts_it != vector_mapping.end()) {
 		value_counts = *child_entries[value_counts_it->second.GetChildIndex(0).GetPrimaryIndex()];
 	}
-	auto null_value_counts_it = name_to_vec.find("null_value_counts");
-	if (null_value_counts_it != name_to_vec.end()) {
+	auto null_value_counts_it = vector_mapping.find(NULL_VALUE_COUNTS);
+	if (null_value_counts_it != vector_mapping.end()) {
 		null_value_counts = *child_entries[null_value_counts_it->second.GetChildIndex(0).GetPrimaryIndex()];
 	}
-	auto nan_value_counts_it = name_to_vec.find("nan_value_counts");
-	if (nan_value_counts_it != name_to_vec.end()) {
+	auto nan_value_counts_it = vector_mapping.find(NAN_VALUE_COUNTS);
+	if (nan_value_counts_it != vector_mapping.end()) {
 		nan_value_counts = *child_entries[nan_value_counts_it->second.GetChildIndex(0).GetPrimaryIndex()];
 	}
 	auto &partition_vec = child_entries[partition_idx.GetChildIndex(0).GetPrimaryIndex()];
@@ -265,5 +274,7 @@ idx_t ManifestFileReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 	}
 	return produced;
 }
+
+} // namespace manifest_file
 
 } // namespace duckdb
