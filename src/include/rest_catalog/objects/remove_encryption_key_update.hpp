@@ -5,7 +5,6 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/base_update.hpp"
 
 using namespace duckdb_yyjson;
@@ -13,22 +12,23 @@ using namespace duckdb_yyjson;
 namespace duckdb {
 namespace rest_api_objects {
 
-class EnableRowLineageUpdate {
+class RemoveEncryptionKeyUpdate {
 public:
-	EnableRowLineageUpdate();
-	EnableRowLineageUpdate(const EnableRowLineageUpdate &) = delete;
-	EnableRowLineageUpdate &operator=(const EnableRowLineageUpdate &) = delete;
-	EnableRowLineageUpdate(EnableRowLineageUpdate &&) = default;
-	EnableRowLineageUpdate &operator=(EnableRowLineageUpdate &&) = default;
+	RemoveEncryptionKeyUpdate();
+	RemoveEncryptionKeyUpdate(const RemoveEncryptionKeyUpdate &) = delete;
+	RemoveEncryptionKeyUpdate &operator=(const RemoveEncryptionKeyUpdate &) = delete;
+	RemoveEncryptionKeyUpdate(RemoveEncryptionKeyUpdate &&) = default;
+	RemoveEncryptionKeyUpdate &operator=(RemoveEncryptionKeyUpdate &&) = default;
 
 public:
-	static EnableRowLineageUpdate FromJSON(yyjson_val *obj);
+	static RemoveEncryptionKeyUpdate FromJSON(yyjson_val *obj);
 
 public:
 	string TryFromJSON(yyjson_val *obj);
 
 public:
 	BaseUpdate base_update;
+	string key_id;
 	string action;
 	bool has_action = false;
 };

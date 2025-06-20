@@ -101,6 +101,8 @@ public:
 	static string ToDuckDBPath(const string &raw_path);
 	string GetPath() const;
 	const IcebergTableMetadata &GetMetadata() const;
+	bool HasTransactionData() const;
+	const IcebergTransactionData &GetTransactionData() const;
 	optional_ptr<IcebergSnapshot> GetSnapshot() const;
 	const IcebergTableSchema &GetSchema() const;
 
@@ -156,12 +158,16 @@ public:
 	vector<LogicalType> types;
 	TableFilterSet table_filters;
 
-	unique_ptr<ManifestFileReader> data_manifest_reader;
-	unique_ptr<ManifestFileReader> delete_manifest_reader;
+	unique_ptr<manifest_file::ManifestFileReader> data_manifest_reader;
+	unique_ptr<manifest_file::ManifestFileReader> delete_manifest_reader;
 
 	vector<IcebergManifestEntry> data_files;
 	vector<IcebergManifest> data_manifests;
 	vector<IcebergManifest> delete_manifests;
+	vector<reference<IcebergManifestFile>> transaction_data_manifests;
+	vector<reference<IcebergManifestFile>> transaction_delete_manifests;
+	idx_t transaction_data_idx = 0;
+	idx_t transaction_delete_idx = 0;
 
 	vector<IcebergManifest>::iterator current_data_manifest;
 	mutable vector<IcebergManifest>::iterator current_delete_manifest;

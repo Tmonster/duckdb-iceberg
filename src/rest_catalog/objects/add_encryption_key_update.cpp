@@ -1,11 +1,10 @@
 
-#include "rest_catalog/objects/enable_row_lineage_update.hpp"
+#include "rest_catalog/objects/add_encryption_key_update.hpp"
 
 #include "yyjson.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "rest_catalog/response_objects.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 using namespace duckdb_yyjson;
@@ -13,11 +12,11 @@ using namespace duckdb_yyjson;
 namespace duckdb {
 namespace rest_api_objects {
 
-EnableRowLineageUpdate::EnableRowLineageUpdate() {
+AddEncryptionKeyUpdate::AddEncryptionKeyUpdate() {
 }
 
-EnableRowLineageUpdate EnableRowLineageUpdate::FromJSON(yyjson_val *obj) {
-	EnableRowLineageUpdate res;
+AddEncryptionKeyUpdate AddEncryptionKeyUpdate::FromJSON(yyjson_val *obj) {
+	AddEncryptionKeyUpdate res;
 	auto error = res.TryFromJSON(obj);
 	if (!error.empty()) {
 		throw InvalidInputException(error);
@@ -25,11 +24,20 @@ EnableRowLineageUpdate EnableRowLineageUpdate::FromJSON(yyjson_val *obj) {
 	return res;
 }
 
-string EnableRowLineageUpdate::TryFromJSON(yyjson_val *obj) {
+string AddEncryptionKeyUpdate::TryFromJSON(yyjson_val *obj) {
 	string error;
 	error = base_update.TryFromJSON(obj);
 	if (!error.empty()) {
 		return error;
+	}
+	auto encryption_key_val = yyjson_obj_get(obj, "encryption-key");
+	if (!encryption_key_val) {
+		return "AddEncryptionKeyUpdate required property 'encryption-key' is missing";
+	} else {
+		error = encryption_key.TryFromJSON(encryption_key_val);
+		if (!error.empty()) {
+			return error;
+		}
 	}
 	auto action_val = yyjson_obj_get(obj, "action");
 	if (action_val) {
@@ -38,7 +46,7 @@ string EnableRowLineageUpdate::TryFromJSON(yyjson_val *obj) {
 			action = yyjson_get_str(action_val);
 		} else {
 			return StringUtil::Format(
-			    "EnableRowLineageUpdate property 'action' is not of type 'string', found '%s' instead",
+			    "AddEncryptionKeyUpdate property 'action' is not of type 'string', found '%s' instead",
 			    yyjson_get_type_desc(action_val));
 		}
 	}

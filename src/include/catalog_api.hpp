@@ -7,7 +7,6 @@
 #include "iceberg_metadata.hpp"
 #include "rest_catalog/objects/table_identifier.hpp"
 #include "rest_catalog/objects/load_table_result.hpp"
-//#include "storage/irc_catalog.hpp"
 
 namespace duckdb {
 

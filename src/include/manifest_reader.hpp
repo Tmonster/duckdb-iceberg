@@ -1,5 +1,7 @@
 #pragma once
 
+#include "duckdb/common/multi_file/multi_file_data.hpp"
+
 #include "iceberg_options.hpp"
 
 #include "metadata/iceberg_manifest.hpp"
@@ -24,20 +26,22 @@ public:
 public:
 	void Initialize(unique_ptr<AvroScan> scan_p);
 	bool Finished() const;
-	virtual void CreateNameMapping(idx_t i, const LogicalType &type, const string &name) = 0;
-	virtual bool ValidateNameMapping() = 0;
+	virtual void CreateVectorMapping(idx_t i, MultiFileColumnDefinition &column) = 0;
+	virtual bool ValidateVectorMapping() = 0;
 
 protected:
 	idx_t ScanInternal(idx_t remaining);
 
 protected:
 	DataChunk chunk;
-	case_insensitive_map_t<ColumnIndex> name_to_vec;
+	unordered_map<int32_t, ColumnIndex> vector_mapping;
 	const idx_t iceberg_version;
 	unique_ptr<AvroScan> scan;
 	idx_t offset = 0;
 	bool finished = true;
 };
+
+namespace manifest_list {
 
 //! Produces IcebergManifests read, from the 'manifest_list'
 class ManifestListReader : public BaseManifestReader {
@@ -48,12 +52,16 @@ public:
 
 public:
 	idx_t Read(idx_t count, vector<IcebergManifest> &result);
-	void CreateNameMapping(idx_t i, const LogicalType &type, const string &name) override;
-	bool ValidateNameMapping() override;
+	void CreateVectorMapping(idx_t i, MultiFileColumnDefinition &column) override;
+	bool ValidateVectorMapping() override;
 
 private:
 	idx_t ReadChunk(idx_t offset, idx_t count, vector<IcebergManifest> &result);
 };
+
+} // namespace manifest_list
+
+namespace manifest_file {
 
 //! Produces IcebergManifestEntries read, from the 'manifest_file'
 class ManifestFileReader : public BaseManifestReader {
@@ -64,8 +72,8 @@ public:
 
 public:
 	idx_t Read(idx_t count, vector<IcebergManifestEntry> &result);
-	void CreateNameMapping(idx_t i, const LogicalType &type, const string &name) override;
-	bool ValidateNameMapping() override;
+	void CreateVectorMapping(idx_t i, MultiFileColumnDefinition &column) override;
+	bool ValidateVectorMapping() override;
 
 public:
 	void SetSequenceNumber(sequence_number_t sequence_number);
@@ -82,5 +90,7 @@ public:
 	//! Whether the deleted entries should be skipped outright
 	bool skip_deleted = false;
 };
+
+} // namespace manifest_file
 
 } // namespace duckdb
