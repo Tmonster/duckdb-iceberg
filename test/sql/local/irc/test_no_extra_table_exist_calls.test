@@ -1,0 +1,181 @@
+# name: test/sql/local/irc/test_no_extra_table_exist_calls.test
+# description: test integration with iceberg catalog read
+# group: [irc]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+pragma enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+# query III
+# select * from my_datalake.default.table_unpartitioned order by all;
+# ----
+# 2023-03-01	1	a
+# 2023-03-02	2	b
+# 2023-03-03	3	c
+# 2023-03-04	4	d
+# 2023-03-05	5	e
+# 2023-03-06	6	f
+# 2023-03-07	7	g
+# 2023-03-08	8	h
+# 2023-03-09	9	i
+# 2023-03-10	10	j
+# 2023-03-11	11	k
+# 2023-03-12	12	l
+#
+#
+# # only 3 requests to check the existence of the table to start
+# query II
+# select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+# ----
+# http://127.0.0.1:8181/v1/namespaces	GET
+# http://127.0.0.1:8181/v1/namespaces/default/tables	GET
+# http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+#
+# statement ok
+# pragma truncate_duckdb_logs;
+#
+# query III
+# select * from my_datalake.default.table_unpartitioned order by all;
+# ----
+# 2023-03-01	1	a
+# 2023-03-02	2	b
+# 2023-03-03	3	c
+# 2023-03-04	4	d
+# 2023-03-05	5	e
+# 2023-03-06	6	f
+# 2023-03-07	7	g
+# 2023-03-08	8	h
+# 2023-03-09	9	i
+# 2023-03-10	10	j
+# 2023-03-11	11	k
+# 2023-03-12	12	l
+#
+# # 1 more requests to get updated metadata.json information
+# query II
+# select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+# ----
+# http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+#
+# statement ok
+# select * from my_datalake.default.pyspark_iceberg_table_v2;
+#
+# query II
+# select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+# ----
+# http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+# http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
+#
+# statement ok
+# SET VARIABLE snapshot_id = (
+#     select snapshot_id::BIGINT
+#     from iceberg_snapshots(my_datalake.default.pyspark_iceberg_table_v2)
+#     where sequence_number = 4
+# );
+#
+# # Query the IRC again when getting all snapshot information in the set variable query
+# query II
+# select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+# ----
+# http://127.0.0.1:8181/v1/namespaces/default/tables/table_unpartitioned	GET
+# http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
+# http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
+#
+# statement ok
+# pragma truncate_duckdb_logs;
+#
+# statement ok
+# select * from my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => getvariable('snapshot_id'));
+#
+# statement ok
+# pragma truncate_duckdb_logs;
+#
+# # since we already had snapshot id in our cache, we do not need to request from the irc again
+# query II
+# select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+# ----
+
+statement ok
+select * from my_datalake.default.pyspark_iceberg_table_v2;
+
+statement ok
+pragma truncate_duckdb_logs;
+
+# read from non-existent snapshot
+statement error
+select * from my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => 6493492389982378);
+----
+Invalid Configuration Error: Could not find snapshot with id
+
+# the snapshot was not recognized, so make sure we requested from the catalog again in case
+# it was some new snapshot we have not yet queried
+query II
+select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+----
+http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
+
+mode skip
+
+statement ok
+pragma truncate_duckdb_logs;
+
+statement ok
+select * from my_datalake.default.pyspark_iceberg_table_v2
+
+statement ok
+pragma truncate_duckdb_logs;
+
+statement ok
+begin transaction;
+
+# first read from transaction
+statement ok
+select * from my_datalake.default.pyspark_iceberg_table_v2
+
+# read from non-existent snapshot. This should not request from the irc
+statement error
+select * from my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => 6493492389982378);
+----
+Invalid Configuration Error: Could not find snapshot with id
+
+statement ok
+rollback;
+
+# there should only be one request to the irc in this transaction
+query II
+select request.url url, request.type from duckdb_logs_parsed('HTTP') where url like '%namespaces%';
+----
+http://127.0.0.1:8181/v1/namespaces/default/tables/pyspark_iceberg_table_v2	GET
