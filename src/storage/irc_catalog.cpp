@@ -12,7 +12,9 @@
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "rest_catalog/objects/catalog_config.hpp"
+#include "duckdb/planner/operator/logical_create_table.hpp"
 #include "storage/irc_catalog.hpp"
+// #include "storage/iceberg_insert.hpp"
 
 #include <regex>
 #include "storage/irc_authorization.hpp"
@@ -72,10 +74,6 @@ void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	throw NotImplementedException("IRCatalog::DropSchema not implemented");
 }
 
-PhysicalOperator &IRCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
-                                               LogicalCreateTable &op, PhysicalOperator &plan) {
-	throw NotImplementedException("IRCatalog PlanCreateTableAs");
-}
 PhysicalOperator &IRCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
                                         PhysicalOperator &plan) {
 	throw NotImplementedException("IRCatalog PlanDelete");
@@ -437,6 +435,9 @@ unique_ptr<Catalog> IRCatalog::Attach(StorageExtensionInfo *storage_info, Client
 		} else if (lower_name == "endpoint") {
 			attach_options.endpoint = StringUtil::Lower(entry.second.ToString());
 			StringUtil::RTrim(attach_options.endpoint, "/");
+		} else if (lower_name == "warehouse_location") {
+			attach_options.warehouse_location = StringUtil::Lower(entry.second.ToString());
+			attach_options.has_warehouse_location = true;
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}

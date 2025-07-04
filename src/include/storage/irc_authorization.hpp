@@ -16,6 +16,10 @@ struct IcebergAttachOptions {
 	string warehouse;
 	string secret;
 	string name;
+	// helps writing tables to the correct storage without needing
+	// to get a location from metadata
+	bool has_warehouse_location = false;
+	string warehouse_location;
 	bool allows_deletes = true;
 	IRCAuthorizationType authorization_type = IRCAuthorizationType::INVALID;
 	unordered_map<string, Value> options;

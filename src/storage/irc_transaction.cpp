@@ -1,3 +1,4 @@
+#include "duckdb/common/assert.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -7,6 +8,7 @@
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_authorization.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
+#include "storage/table_create/iceberg_create_table_request.hpp"
 #include "catalog_utils.hpp"
 
 namespace duckdb {
@@ -22,7 +24,18 @@ void IRCTransaction::MarkTableAsDirty(const ICTableEntry &table) {
 	dirty_tables.insert(&table);
 }
 
+void IRCTransaction::MarkTableAsNew(const ICTableEntry &table) {
+	new_tables.insert(&table);
+}
+
+void IRCTransaction::AddCreateTableRequest(unique_ptr<IcebergCreateTableRequest> creat_table_request) {
+}
+
 void IRCTransaction::Start() {
+}
+
+IRCatalog &IRCTransaction::GetCatalog() {
+	return catalog;
 }
 
 void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
@@ -140,6 +153,40 @@ static rest_api_objects::TableRequirement CreateAssertRefSnapshotIdRequirement(I
 	return req;
 }
 
+void IRCTransaction::CommitNewTables(ClientContext &context) {
+	for (auto &table : new_tables) {
+		// TODO: add D_ASSERT for the post table url
+		auto table_namespace = table->schema.name;
+		auto url_builder = catalog.GetBaseUrl();
+		url_builder.AddPathComponent(catalog.prefix);
+		url_builder.AddPathComponent("namespaces");
+		url_builder.AddPathComponent(table_namespace);
+		url_builder.AddPathComponent("tables");
+
+		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
+		yyjson_mut_doc *doc = doc_p.get();
+		auto root_object = yyjson_mut_obj(doc);
+		yyjson_mut_doc_set_root(doc, root_object);
+
+		// todo, get the new table commit info?
+		D_ASSERT(table->table_info && table->table_info->transaction_data);
+		auto &create_table_request = table->table_info->transaction_data->create;
+		auto create_table_json = create_table_request->CreateTableToJSON(doc, root_object);
+
+		try {
+			auto response = catalog.auth_handler->PostRequest(context, url_builder, create_table_json);
+			if (response->status != HTTPStatusCode::OK_200) {
+				throw InvalidConfigurationException(
+				    "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
+				    url_builder.GetURL(), EnumUtil::ToString(response->status), response->reason, response->body);
+			}
+		} catch (const std::exception &e) {
+			throw InvalidConfigurationException("Request to '%s' returned a non-200 status code body: %s",
+			                                    url_builder.GetURL(), e.what());
+		}
+	}
+}
+
 void IRCTransaction::DropSecrets(ClientContext &context) {
 	auto &secret_manager = SecretManager::Get(context);
 	for (auto &secret_name : created_secrets) {
@@ -156,7 +203,7 @@ rest_api_objects::CommitTransactionRequest IRCTransaction::GetTransactionRequest
 		table_change.identifier.name = table->name;
 		table_change.has_identifier = true;
 
-		auto &metadata = table->table_info.table_metadata;
+		auto &metadata = table->table_info->table_metadata;
 		auto current_snapshot = metadata.GetLatestSnapshot();
 		if (current_snapshot) {
 			auto &manifest_list_path = current_snapshot->manifest_list;
@@ -169,7 +216,7 @@ rest_api_objects::CommitTransactionRequest IRCTransaction::GetTransactionRequest
 			}
 		}
 
-		auto &transaction_data = *table->table_info.transaction_data;
+		auto &transaction_data = *table->table_info->transaction_data;
 		for (auto &update : transaction_data.updates) {
 			update->CreateUpdate(db, context, commit_state);
 		}
@@ -192,13 +239,25 @@ rest_api_objects::CommitTransactionRequest IRCTransaction::GetTransactionRequest
 }
 
 void IRCTransaction::Commit() {
-	if (dirty_tables.empty()) {
+
+	if (dirty_tables.empty() && new_tables.empty()) {
 		return;
 	}
 
 	Connection temp_con(db);
 	temp_con.BeginTransaction();
 	auto &context = temp_con.context;
+
+	if (!new_tables.empty()) {
+		CommitNewTables(*context);
+	}
+
+	if (dirty_tables.empty()) {
+		// we don't need to do anything here.
+		temp_con.Rollback();
+		return;
+	}
+
 	try {
 		auto transaction = GetTransactionRequest(*context);
 		auto &authentication = *catalog.auth_handler;
@@ -240,6 +299,7 @@ void IRCTransaction::Commit() {
 				url_builder.AddPathComponent(table_change.identifier.name);
 
 				auto transaction_json = ConstructTableUpdateJSON(table_change);
+				Printer::Print(transaction_json);
 
 				auto response = authentication.PostRequest(*context, url_builder, transaction_json);
 				if (response->status != HTTPStatusCode::OK_200) {
@@ -271,7 +331,7 @@ void IRCTransaction::CleanupFiles() {
 	}
 	auto &fs = FileSystem::GetFileSystem(db);
 	for (auto &table : dirty_tables) {
-		auto &transaction_data = *table->table_info.transaction_data;
+		auto &transaction_data = *table->table_info->transaction_data;
 		for (auto &update : transaction_data.updates) {
 			if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
 				continue;
