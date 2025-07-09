@@ -9,13 +9,19 @@ duckdb_extension_load(iceberg
 
 duckdb_extension_load(tpch)
 duckdb_extension_load(icu)
+duckdb_extension_load(ducklake
+        LOAD_TESTS
+        GIT_URL https://github.com/duckdb/ducklake
+        GIT_TAG 9cc2d903c51d360ff3fc6afb10cf38f8eac2e25b
+)
 
 duckdb_extension_load(avro
         LOAD_TESTS
-        GIT_URL https://github.com/duckdb/duckdb_avro
+        GIT_URL https://github.com/duckdb/duckdb-avro
         GIT_TAG 180e41e8ad13b8712d207785a6bca0aa39341040
 )
 
+if (NOT EMSCRIPTEN)
 ################## AWS
 if (NOT MINGW)
     duckdb_extension_load(aws
@@ -24,9 +30,10 @@ if (NOT MINGW)
             GIT_TAG main
     )
 endif ()
+endif()
 
 duckdb_extension_load(httpfs
         GIT_URL https://github.com/duckdb/duckdb-httpfs
-        GIT_TAG 7b09112ad257249130375c0841d962eecb85662e
+        GIT_TAG da2821906eb42f7255d969be3e073bc1b45a71a8
         INCLUDE_DIR extension/httpfs/include
 )
