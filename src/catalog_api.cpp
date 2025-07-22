@@ -24,9 +24,9 @@ static string GetSchemaName(const vector<string> &items) {
 }
 
 //! Used for the path parameters
-static string GetEncodedSchemaName(const vector<string> &items) {
+static PathComponent GetEncodedSchemaName(const vector<string> &items) {
 	static const string unit_separator = "%1F";
-	return StringUtil::Join(items, unit_separator);
+	return PathComponent(StringUtil::Join(items, unit_separator), true);
 }
 
 [[noreturn]] static void ThrowException(const string &url, const HTTPResponse &response, const string &method) {
