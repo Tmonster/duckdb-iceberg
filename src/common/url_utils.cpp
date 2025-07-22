@@ -36,7 +36,7 @@ string IRCEndpointBuilder::GetURL() const {
 	//! {host}[/{version}][/{prefix}]/{path_component[0]}/{path_component[1]}
 	string ret = host;
 	for (auto &component : path_components) {
-		ret += "/" + component;
+		ret += "/" + StringUtil::URLEncode(component);
 	}
 
 	// encode params
