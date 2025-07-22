@@ -83,7 +83,9 @@ unique_ptr<HTTPResponse> SIGV4Authorization::PostRequest(ClientContext &context,
 		aws_input.path_segments.push_back(component);
 	}
 	for (auto &component : endpoint_builder.path_components) {
-		aws_input.path_segments.push_back(component);
+		// aws will encode these components
+		D_ASSERT(!component.url_encoded);
+		aws_input.path_segments.push_back(component.component);
 	}
 
 	for (auto &param : endpoint_builder.GetParams()) {
@@ -120,7 +122,9 @@ unique_ptr<HTTPResponse> SIGV4Authorization::GetRequest(ClientContext &context,
 		aws_input.path_segments.push_back(component);
 	}
 	for (auto &component : endpoint_builder.path_components) {
-		aws_input.path_segments.push_back(component);
+		// aws will encode these components
+		D_ASSERT(!component.url_encoded);
+		aws_input.path_segments.push_back(component.component);
 	}
 
 	for (auto &param : endpoint_builder.GetParams()) {

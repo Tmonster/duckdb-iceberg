@@ -9,6 +9,11 @@ void IRCEndpointBuilder::AddPathComponent(const string &component) {
 	}
 }
 
+void IRCEndpointBuilder::AddPathComponent(PathComponent &component) {
+	D_ASSERT(!component.component.empty());
+	path_components.push_back(component);
+}
+
 string IRCEndpointBuilder::GetHost() const {
 	return host;
 }
@@ -36,8 +41,10 @@ string IRCEndpointBuilder::GetURL() const {
 	//! {host}[/{version}][/{prefix}]/{path_component[0]}/{path_component[1]}
 	string ret = host;
 	for (auto &component : path_components) {
-		ret += "/" + StringUtil::URLEncode(component);
+		ret += "/" + component.GetEncodedComponent();
 	}
+	auto wat = "test.nested.namespace";
+	auto encoded_wat = StringUtil::URLEncode(wat);
 
 	// encode params
 	auto sep = "?";
