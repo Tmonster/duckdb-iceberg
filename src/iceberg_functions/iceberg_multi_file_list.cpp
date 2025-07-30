@@ -8,7 +8,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/planner/filter/struct_filter.hpp"
@@ -649,6 +648,24 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 	D_ASSERT(current_delete_manifest == delete_manifests.end());
 }
 
+vector<IcebergFileListExtendedEntry> IcebergMultiFileList::GetFilesExtended() {
+	lock_guard<mutex> l(lock);
+	InitializeFiles(l);
+
+	vector<IcebergFileListExtendedEntry> result;
+	if (HasTransactionData()) {
+		throw NotImplementedException("Cannot stack multiple updates in a transaction");
+	}
+
+	for (auto &file : data_files) {
+		IcebergFileListExtendedEntry file_entry;
+		file_entry.file.path = file.file_path;
+		file_entry.file.file_size_bytes = file.file_size_in_bytes;
+		result.push_back(file_entry);
+	}
+	return result;
+}
+
 void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,
                                           const vector<MultiFileColumnDefinition> &global_columns,
                                           const vector<ColumnIndex> &column_indexes) const {
@@ -656,7 +673,14 @@ void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	//! FIXME: delete files could also be made without row_ids,
 	//! in which case we need to rely on the `'schema.column-mapping.default'` property just like data files do.
-	auto &parquet_scan_entry = ExtensionUtil::GetTableFunction(instance, "parquet_scan");
+	auto &system_catalog = Catalog::GetSystemCatalog(instance);
+	auto data = CatalogTransaction::GetSystemTransaction(instance);
+	auto &schema = system_catalog.GetSchema(data, DEFAULT_SCHEMA);
+	auto catalog_entry = schema.GetEntry(data, CatalogType::TABLE_FUNCTION_ENTRY, "parquet_scan");
+	if (!catalog_entry) {
+		throw InvalidInputException("Function with name \"parquet_scan\" not found!");
+	}
+	auto &parquet_scan_entry = catalog_entry->Cast<TableFunctionCatalogEntry>();
 	auto &parquet_scan = parquet_scan_entry.functions.functions[0];
 
 	// Prepare the inputs for the bind
