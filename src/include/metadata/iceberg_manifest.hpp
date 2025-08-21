@@ -7,6 +7,7 @@
 
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/execution/execution_context.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/common/insertion_order_preserving_map.hpp"
 
@@ -40,6 +41,7 @@ public:
 	vector<pair<int32_t, Value>> partition_values;
 	//! Inherited from the 'manifest_file' if NULL and 'status == EXISTING'
 	sequence_number_t sequence_number;
+	int64_t snapshot_id;
 	//! Inherited from the 'manifest_file'
 	int32_t partition_spec_id;
 	int64_t file_size_in_bytes;
