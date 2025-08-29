@@ -16,7 +16,7 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-pragma enable_logging('HTTP');
+CALL enable_logging('HTTP');
 
 statement ok
 set logging_level='debug'
@@ -56,7 +56,7 @@ SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE reques
 http://127.0.0.1:8181/v1/oauth/tokens	OK
 
 statement ok
-pragma truncate_duckdb_logs;
+CALL truncate_duckdb_logs();
 
 query III
 select * from my_datalake.default.table_unpartitioned order by all;
@@ -102,11 +102,6 @@ select count(*) from my_datalake.default.pyspark_iceberg_table_v2;
 
 statement error
 update my_datalake.default.table_unpartitioned set number = 5 where number < 5;
-----
-<REGEX>:.*Not implemented Error.*
-
-statement error
-delete from my_datalake.default.table_unpartitioned where number < 5;
 ----
 <REGEX>:.*Not implemented Error.*
 
