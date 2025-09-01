@@ -29,6 +29,7 @@ set(EXTENSION_SOURCES
     src/deletes/equality_delete.cpp
     src/deletes/positional_delete.cpp
     src/deletes/deletion_vector.cpp
+    src/deletes/iceberg_delete_filter.cpp
     src/metadata/iceberg_transform.cpp
     src/metadata/iceberg_table_schema.cpp
     src/metadata/iceberg_partition_spec.cpp

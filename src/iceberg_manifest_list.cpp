@@ -1,3 +1,4 @@
+#include "include/metadata/iceberg_manifest_list.hpp"
 #include "metadata/iceberg_manifest_list.hpp"
 #include "duckdb/main/database.hpp"
 
@@ -117,59 +118,73 @@ void WriteToFile(const IcebergManifestList &manifest_list, CopyFunction &copy, D
 
 	DataChunk data;
 	data.Initialize(allocator, types, manifest_list.manifests.size());
-
+	idx_t dropped_manifests = 0;
+	// if the current update is a delete, we merge previously written deletes
+	// which means we can drop all previous manifest lists that refer to delete files
+	auto current_update_is_delete = manifest_list.manifests.end()->content == IcebergManifestContentType::DELETE;
 	for (idx_t i = 0; i < manifest_list.manifests.size(); i++) {
 		auto &manifest = manifest_list.manifests[i];
 		idx_t col_idx = 0;
+		idx_t manifest_row_id = i - dropped_manifests;
+		D_ASSERT(manifest_row_id >= 0);
+		if (current_update_is_delete && i < manifest_list.manifests.size() - 1 && manifest.content == IcebergManifestContentType::DELETE) {
+			// skip. we merge positional delete data.
+			// Equality delete data, I still need to figure out.
+			++dropped_manifests;
+			continue;
+		}
 
 		// manifest_path: string - 500
-		data.SetValue(col_idx++, i, Value(manifest.manifest_path));
+		data.SetValue(col_idx++, manifest_row_id, Value(manifest.manifest_path));
 
 		// manifest_length: long - 501
-		data.SetValue(col_idx++, i, Value::BIGINT(manifest.manifest_length));
+		data.SetValue(col_idx++, manifest_row_id, Value::BIGINT(manifest.manifest_length));
 
 		// partition_spec_id: long - 502
-		data.SetValue(col_idx++, i, Value::BIGINT(manifest.partition_spec_id));
+		data.SetValue(col_idx++, manifest_row_id, Value::BIGINT(manifest.partition_spec_id));
 
 		// content: int - 517
-		data.SetValue(col_idx++, i, Value::INTEGER(static_cast<int32_t>(manifest.content)));
+		data.SetValue(col_idx++, manifest_row_id, Value::INTEGER(static_cast<int32_t>(manifest.content)));
 
 		// sequence_number: long - 515
-		data.SetValue(col_idx++, i, Value::BIGINT(manifest.sequence_number));
+		data.SetValue(col_idx++, manifest_row_id, Value::BIGINT(manifest.sequence_number));
 
 		// min_sequence_number: long - 516
 		if (!manifest.has_min_sequence_number) {
 			//! Behavior copied from pyiceberg
-			data.SetValue(col_idx++, i, Value::BIGINT(-1));
+			data.SetValue(col_idx++, manifest_row_id, Value::BIGINT(-1));
 		} else {
-			data.SetValue(col_idx++, i, Value::BIGINT(manifest.min_sequence_number));
+			data.SetValue(col_idx++, manifest_row_id, Value::BIGINT(manifest.min_sequence_number));
 		}
 
 		// added_snapshot_id: long - 503
-		data.SetValue(col_idx++, i, Value::BIGINT(manifest.added_snapshot_id));
+		data.SetValue(col_idx++, manifest_row_id, Value::BIGINT(manifest.added_snapshot_id));
 
 		// added_files_count: int - 504
-		data.SetValue(col_idx++, i, Value::INTEGER(manifest.added_files_count));
+		data.SetValue(col_idx++, manifest_row_id, Value::INTEGER(manifest.added_files_count));
 
 		// existing_files_count: int - 505
-		data.SetValue(col_idx++, i, Value::INTEGER(manifest.existing_files_count));
+		data.SetValue(col_idx++, manifest_row_id, Value::INTEGER(manifest.existing_files_count));
 
 		// deleted_files_count: int - 506
-		data.SetValue(col_idx++, i, Value::INTEGER(manifest.deleted_files_count));
+		data.SetValue(col_idx++, manifest_row_id, Value::INTEGER(manifest.deleted_files_count));
 
 		// added_rows_count: long - 512
-		data.SetValue(col_idx++, i, Value::BIGINT(static_cast<int64_t>(manifest.added_rows_count)));
+		data.SetValue(col_idx++, manifest_row_id, Value::BIGINT(static_cast<int64_t>(manifest.added_rows_count)));
 
 		// existing_rows_count: long - 513
-		data.SetValue(col_idx++, i, Value::BIGINT(static_cast<int64_t>(manifest.existing_rows_count)));
+		data.SetValue(col_idx++, manifest_row_id, Value::BIGINT(static_cast<int64_t>(manifest.existing_rows_count)));
 
 		// deleted_rows_count: long - 514
-		data.SetValue(col_idx++, i, Value::BIGINT(static_cast<int64_t>(manifest.deleted_rows_count)));
+		data.SetValue(col_idx++, manifest_row_id, Value::BIGINT(static_cast<int64_t>(manifest.deleted_rows_count)));
 
 		// partitions: list<508: field_summary> - 507
-		data.SetValue(col_idx++, i, manifest.partitions.ToValue());
+		data.SetValue(col_idx++, manifest_row_id, manifest.partitions.ToValue());
 	}
-	data.SetCardinality(manifest_list.manifests.size());
+	if (dropped_manifests > 0) {
+		auto break_here = 0;
+	}
+	data.SetCardinality(manifest_list.manifests.size() - dropped_manifests);
 
 	CopyInfo copy_info;
 	copy_info.is_from = false;

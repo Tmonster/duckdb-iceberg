@@ -3,7 +3,7 @@
 #include "iceberg_logging.hpp"
 #include "iceberg_predicate.hpp"
 #include "iceberg_value.hpp"
-
+#include "storage/iceberg_delete.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/function/function_binder.hpp"
@@ -21,6 +21,8 @@
 #include "metadata/iceberg_table_metadata.hpp"
 
 namespace duckdb {
+
+struct IcebergDeleteData;
 
 IcebergMultiFileReader::IcebergMultiFileReader(shared_ptr<TableFunctionInfo> function_info)
     : function_info(function_info) {
@@ -264,6 +266,10 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 	auto &reader = *reader_data.reader;
 	auto file_id = reader.file_list_idx.GetIndex();
 
+	if (!delete_map) {
+		delete_map = make_shared_ptr<IcebergDeleteMap>();
+	}
+
 	{
 		lock_guard<mutex> guard(multi_file_list.lock);
 		const auto &data_file = multi_file_list.data_files[file_id];
@@ -274,7 +280,11 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 		    multi_file_list.current_transaction_delete_manifest != multi_file_list.transaction_delete_manifests.end()) {
 			multi_file_list.ProcessDeletes(global_columns, global_column_ids);
 		}
-		reader.deletion_filter = std::move(multi_file_list.GetPositionalDeletesForFile(file_path));
+		auto iceberg_delete_filter = multi_file_list.GetPositionalDeletesForFile(file_path);
+		if (iceberg_delete_filter && iceberg_delete_filter->delete_data) {
+			delete_map->AddDeleteData(file_path, iceberg_delete_filter->delete_data);
+		}
+		reader.deletion_filter = std::move(iceberg_delete_filter);
 	}
 
 	auto &local_columns = reader_data.reader->columns;

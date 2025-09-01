@@ -20,6 +20,19 @@ namespace duckdb {
 
 struct IcebergDeleteMap {
 
+	void AddExtendedFileInfo(IcebergFileListExtendedEntry file_entry) {
+		auto filename = file_entry.file.path;
+		file_map.emplace(std::move(filename), std::move(file_entry));
+	}
+
+	IcebergFileListExtendedEntry GetExtendedFileInfo(const string &filename) {
+		auto delete_entry = file_map.find(filename);
+		if (delete_entry == file_map.end()) {
+			throw InternalException("Could not find matching file for written delete file");
+		}
+		return delete_entry->second;
+	}
+
 	optional_ptr<IcebergDeleteData> GetDeleteData(const string &filename) {
 		lock_guard<mutex> guard(lock);
 		auto entry = delete_data_map.find(filename);
@@ -29,8 +42,19 @@ struct IcebergDeleteMap {
 		return entry->second.get();
 	}
 
+	void ClearDeletes(const string &filename) {
+		lock_guard<mutex> guard(lock);
+		delete_data_map.erase(filename);
+	}
+
+	void AddDeleteData(const string &filename, shared_ptr<IcebergDeleteData> delete_data) {
+		lock_guard<mutex> guard(lock);
+		delete_data_map.emplace(filename, std::move(delete_data));
+	}
+
 private:
 	mutex lock;
+	unordered_map<string, IcebergFileListExtendedEntry> file_map;
 	unordered_map<string, shared_ptr<IcebergDeleteData>> delete_data_map;
 };
 
@@ -57,11 +81,10 @@ public:
 	}
 
 	mutex lock;
-	unordered_map<string, IcebergDeleteFileInfo> written_files;
+	unordered_map<string, IcebergDeleteFile> written_files;
 	unordered_map<string, WrittenColumnInfo> written_columns;
 	idx_t total_deleted_count = 0;
 	unordered_map<string, vector<idx_t>> deleted_rows;
-	unordered_set<string> filenames;
 
 	void Flush(IcebergDeleteLocalState &local_state) {
 		auto &local_entry = local_state.file_row_numbers;
@@ -77,9 +100,6 @@ public:
 
 	void FinalFlush(IcebergDeleteLocalState &local_state) {
 		Flush(local_state);
-		// flush the file names to the global state
-		lock_guard<mutex> guard(lock);
-		filenames.emplace(local_state.current_file_name);
 	}
 };
 
@@ -90,7 +110,7 @@ public:
 
 	//! The table to delete from
 	ICTableEntry &table;
-	// A map of filename -> data file index and filename -> delete data
+	//! A map of filename -> data file index and filename -> delete data. Used to merge delete data
 	shared_ptr<IcebergDeleteMap> delete_map;
 	//! The column indexes for the relevant row-id columns
 	vector<idx_t> row_id_indexes;
@@ -128,7 +148,7 @@ public:
 
 private:
 	void WritePositionalDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state,
-	                               const string &filename, IcebergDeleteFileInfo delete_file,
+	                               const string &filename, IcebergDeleteFile delete_file,
 	                               set<idx_t> sorted_deletes) const;
 	void FlushDelete(IRCTransaction &transaction, ClientContext &context, IcebergDeleteGlobalState &global_state,
 	                 const string &filename, vector<idx_t> &deleted_rows) const;

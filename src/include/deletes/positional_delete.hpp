@@ -1,16 +1,19 @@
 #pragma once
 
+#include "storage/iceberg_delete_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 
 namespace duckdb {
 
-struct IcebergPositionalDeleteData : public DeleteFilter {
+struct IcebergPositionalDeleteData : public IcebergDeleteFilter {
 public:
-	IcebergPositionalDeleteData() {
+	IcebergPositionalDeleteData() : IcebergDeleteFilter() {
 	}
 
 public:
 	void AddRow(int64_t row_id) {
+		D_ASSERT(delete_data);
+		delete_data->deleted_rows.push_back(static_cast<idx_t>(row_id));
 		temp_invalid_rows.insert(row_id);
 	}
 

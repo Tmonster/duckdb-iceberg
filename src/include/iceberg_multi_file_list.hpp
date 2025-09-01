@@ -11,6 +11,7 @@
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/types/batched_data_collection.hpp"
 #include "storage/iceberg_metadata_info.hpp"
+#include "storage/iceberg_delete_filter.hpp"
 #include "iceberg_metadata.hpp"
 #include "iceberg_utils.hpp"
 #include "manifest_reader.hpp"
@@ -51,7 +52,8 @@ public:
 	void ScanDeleteFile(const IcebergManifestEntry &entry, const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
 	void ScanPuffinFile(const IcebergManifestEntry &entry) const;
-	unique_ptr<DeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
+	vector<IcebergFileListExtendedEntry> GetFilesExtended();
+	unique_ptr<IcebergDeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
 	void ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
 
@@ -115,7 +117,7 @@ public:
 	vector<IcebergManifestEntry> current_data_files;
 
 	//! For each file that has a delete file, the state for processing that/those delete file(s)
-	mutable case_insensitive_map_t<unique_ptr<DeleteFilter>> positional_delete_data;
+	mutable case_insensitive_map_t<unique_ptr<IcebergDeleteFilter>> positional_delete_data;
 	//! All equality deletes with sequence numbers higher than that of the data_file apply to that data_file
 	mutable map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> equality_delete_data;
 	mutable mutex delete_lock;

@@ -24,6 +24,7 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const IcebergManifestEntry &en
 	D_ASSERT(!entry.equality_ids.empty());
 	D_ASSERT(result_p.ColumnCount() == local_columns.size());
 
+	throw InternalException("This test scans equality delete");
 	auto count = result_p.size();
 	if (count == 0) {
 		return;

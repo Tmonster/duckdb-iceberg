@@ -1,3 +1,4 @@
+#include "storage/iceberg_delete_filter.hpp"
 #include "deletes/positional_delete.hpp"
 #include "iceberg_multi_file_list.hpp"
 

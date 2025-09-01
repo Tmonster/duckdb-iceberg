@@ -24,6 +24,7 @@
 #include "iceberg_utils.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_transaction.hpp"
@@ -470,8 +471,9 @@ public:
 		file_size_bytes = entry.file_size_in_bytes;
 
 		//! Find lower and upper bounds for the 'file_path' of the position delete file
-		auto lower_bound_it = entry.lower_bounds.find(2147483546);
-		auto upper_bound_it = entry.upper_bounds.find(2147483546);
+		auto delete_file_path_id = MultiFileReader::DELETE_FILE_PATH_FIELD_ID;
+		auto lower_bound_it = entry.lower_bounds.find(delete_file_path_id);
+		auto upper_bound_it = entry.upper_bounds.find(delete_file_path_id);
 		if (lower_bound_it == entry.lower_bounds.end() || upper_bound_it == entry.upper_bounds.end()) {
 			throw InvalidInputException("No lower/upper bounds are available for the Position Delete File, this is "
 			                            "required for export to DuckLake");

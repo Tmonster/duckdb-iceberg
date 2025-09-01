@@ -5,6 +5,8 @@
 #include "storage/iceberg_table_information.hpp"
 #include "iceberg_multi_file_reader.hpp"
 #include "iceberg_multi_file_list.hpp"
+#include "../include/iceberg_avro_multi_file_reader.hpp"
+#include "../include/iceberg_multi_file_list.hpp"
 
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
@@ -95,9 +97,9 @@ static optional_ptr<CopyFunctionCatalogEntry> TryGetCopyFunction(DatabaseInstanc
 // Finalize
 //===--------------------------------------------------------------------===//
 void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state,
-                                              const string &filename, IcebergDeleteFileInfo delete_file,
+                                              const string &filename, IcebergDeleteFile delete_file,
                                               set<idx_t> sorted_deletes) const {
-	auto delete_file_path = delete_file.data_file_path;
+	auto delete_file_path = delete_file.file_name;
 	auto info = make_uniq<CopyInfo>();
 	info->file_path = delete_file_path;
 	info->format = "parquet";
@@ -106,8 +108,10 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	// generate the field ids to be written by the parquet writer
 	// these field ids follow icebergs' ids and names for the delete files
 	child_list_t<Value> values;
-	values.emplace_back("file_path", Value::INTEGER(MultiFileReader::DELETE_FILE_PATH_FIELD_ID));
-	values.emplace_back("pos", Value::INTEGER(MultiFileReader::DELETE_POS_FIELD_ID));
+	auto delete_file_path_field_id = MultiFileReader::DELETE_FILE_PATH_FIELD_ID;
+	auto delete_pos_field_id = MultiFileReader::DELETE_POS_FIELD_ID;
+	values.emplace_back("file_path", Value::INTEGER(delete_file_path_field_id));
+	values.emplace_back("pos", Value::INTEGER(delete_pos_field_id));
 	auto field_ids = Value::STRUCT(std::move(values));
 	vector<Value> field_input;
 	field_input.push_back(std::move(field_ids));
@@ -213,18 +217,27 @@ void IcebergDelete::FlushDelete(IRCTransaction &transaction, ClientContext &cont
 		                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
 	}
 
-	IcebergDeleteFileInfo delete_file;
+	IcebergDeleteFile delete_file;
 	delete_file.data_file_path = filename;
-	// check if the file already has deletes
+
+	// // check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
-	// FIXME: merge with existing delete data for the same data file for faster reads.
-	D_ASSERT(!existing_delete_data);
+	if (existing_delete_data) {
+		// deletes already exist for this file - add to set of deletes to write
+		auto &existing_deletes = existing_delete_data->deleted_rows;
+		sorted_deletes.insert(existing_deletes.begin(), existing_deletes.end());
+
+		// clear the deletes
+		delete_map->ClearDeletes(filename);
+		// set the delete file as overwriting existing deletes
+		delete_file.overwrites_existing_delete = true;
+	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	string delete_file_uuid = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes.parquet";
 	string delete_file_path =
 	    fs.JoinPath(table.table_info.table_metadata.location, fs.JoinPath("data", delete_file_uuid));
-
+	delete_file.file_name = delete_file_path;
 	WritePositionalDeleteFile(context, global_state, filename, delete_file, sorted_deletes);
 }
 
@@ -238,10 +251,6 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &irc_transaction = IRCTransaction::Get(context, table.catalog);
 	// write out the delete rows
 	for (auto &entry : global_state.deleted_rows) {
-		auto filename_entry = global_state.filenames.find(entry.first);
-		if (filename_entry == global_state.filenames.end()) {
-			throw InternalException("Filename not found for file index");
-		}
 		FlushDelete(irc_transaction, context, global_state, entry.first, entry.second);
 	}
 	auto &irc_table = table.Cast<ICTableEntry>();
@@ -260,8 +269,9 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 		manifest_entry.file_size_in_bytes = delete_file.file_size_bytes;
 
 		// set lower and upper bound for the filename column
-		manifest_entry.lower_bounds[MultiFileReader::FILENAME_FIELD_ID] = Value::BLOB(data_file_name);
-		manifest_entry.upper_bounds[MultiFileReader::FILENAME_FIELD_ID] = Value::BLOB(data_file_name);
+		auto delete_file_path_field_id = MultiFileReader::DELETE_FILE_PATH_FIELD_ID;
+		manifest_entry.lower_bounds[delete_file_path_field_id] = Value::BLOB(data_file_name);
+		manifest_entry.upper_bounds[delete_file_path_field_id] = Value::BLOB(data_file_name);
 		// set referenced_data_file
 		manifest_entry.referenced_data_file = data_file_name;
 
@@ -328,6 +338,11 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 	if (delete_source) {
 		auto &bind_data = delete_source->bind_data->Cast<MultiFileBindData>();
 		auto &reader = bind_data.multi_file_reader->Cast<IcebergMultiFileReader>();
+		auto &file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
+		auto files = file_list.GetFilesExtended();
+		for (auto &file_entry : files) {
+			delete_map->AddExtendedFileInfo(std::move(file_entry));
+		}
 		reader.delete_map = delete_map;
 	}
 	return planner.Make<IcebergDelete>(table, child_plan, std::move(delete_map), std::move(row_id_indexes));

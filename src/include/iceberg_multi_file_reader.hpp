@@ -78,8 +78,8 @@ public:
 	                                   const virtual_column_map_t &virtual_columns) override;
 
 public:
-	shared_ptr<TableFunctionInfo> function_info;
 	shared_ptr<IcebergDeleteMap> delete_map;
+	shared_ptr<TableFunctionInfo> function_info;
 	IcebergOptions options;
 
 private:

@@ -3,6 +3,7 @@
 #include "iceberg_logging.hpp"
 #include "iceberg_predicate.hpp"
 #include "iceberg_value.hpp"
+#include "storage/iceberg_delete_filter.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
@@ -666,6 +667,36 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 	D_ASSERT(current_delete_manifest == delete_manifests.end());
 }
 
+vector<IcebergFileListExtendedEntry> IcebergMultiFileList::GetFilesExtended() {
+	lock_guard<mutex> l(lock);
+	InitializeFiles(l);
+
+	vector<IcebergFileListExtendedEntry> result;
+
+	for (auto &file : data_files) {
+		IcebergFileListExtendedEntry file_entry;
+		file_entry.file.path = file.file_path;
+		file_entry.file.file_size_bytes = file.file_size_in_bytes;
+		result.push_back(file_entry);
+	}
+
+	if (HasTransactionData()) {
+		auto &transaction_data = GetTransactionData();
+		for (auto &alter_p : transaction_data.alters) {
+			auto &alter = alter_p.get();
+			for (auto &file : alter.manifest_file.data_files) {
+				// if this is transaction local data, we can be positive every delete file only
+				/// references one data file.
+				IcebergFileListExtendedEntry file_entry;
+				file_entry.file.path = file.file_path;
+				file_entry.file.file_size_bytes = file.file_size_in_bytes;
+				result.push_back(file_entry);
+			}
+		}
+	}
+	return result;
+}
+
 void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,
                                           const vector<MultiFileColumnDefinition> &global_columns,
                                           const vector<ColumnIndex> &column_indexes) const {
@@ -739,7 +770,7 @@ void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,
 }
 
 //! FIXME: isn't this problematic if we need to scan the same delete file multiple times??
-unique_ptr<DeleteFilter> IcebergMultiFileList::GetPositionalDeletesForFile(const string &file_path) const {
+unique_ptr<IcebergDeleteFilter> IcebergMultiFileList::GetPositionalDeletesForFile(const string &file_path) const {
 	auto it = positional_delete_data.find(file_path);
 	if (it != positional_delete_data.end()) {
 		// There is delete data for this file, return it

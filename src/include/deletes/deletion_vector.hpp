@@ -1,13 +1,14 @@
 #pragma once
 
+#include "storage/iceberg_delete_filter.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include <roaring/roaring.hh>
 
 namespace duckdb {
 
-struct IcebergDeletionVector : public DeleteFilter {
+struct IcebergDeletionVector : public IcebergDeleteFilter {
 public:
-	IcebergDeletionVector() {
+	IcebergDeletionVector() : IcebergDeleteFilter() {
 	}
 
 public:

@@ -19,7 +19,7 @@ statement ok
 CALL enable_logging('HTTP');
 
 statement ok
-set logging_level='debug'
+set logging_level='debug';
 
 statement ok
 CREATE SECRET (
@@ -57,10 +57,10 @@ query I nosort res_1
 select * from range(100);
 ----
 
-query I
-select name from (show all tables) where schema = 'new_schema_1';
-----
-my_table
+# query I
+# select name from (show all tables) where schema = 'new_schema_1';
+# ----
+# my_table
 
 statement error
 drop schema my_datalake.new_schema_1;

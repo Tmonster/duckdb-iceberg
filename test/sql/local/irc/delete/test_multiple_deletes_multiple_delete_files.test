@@ -66,11 +66,11 @@ select count(*) from iceberg_metadata(my_datalake.default.test) where manifest_c
 statement ok
 delete from my_datalake.default.test where id in (10001, 3000001, 4800001);
 
-# Expect 3 more delete files, each containing point deletes
+# still expect only 3 delete files, with previous delete files being merged with new ones
 query I
 select count(*) from iceberg_metadata(my_datalake.default.test) where manifest_content = 'DELETE';
 ----
-6
+3
 
 query I
 select * from my_datalake.default.test where id in (10000, 10001, 3000000, 3000001, 4800000, 4800001);
