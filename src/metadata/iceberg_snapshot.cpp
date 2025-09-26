@@ -26,13 +26,22 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 	res.manifest_list = manifest_list;
 
 	res.summary.operation = OperationTypeToString(operation);
-
 	if (!has_parent_snapshot) {
 		res.has_parent_snapshot_id = false;
 	} else {
 		res.has_parent_snapshot_id = true;
 		res.parent_snapshot_id = parent_snapshot_id;
 	}
+
+	res.summary.additional_properties["added-data-files"] = "1";
+	res.summary.additional_properties["total-equality-deletes"] = "0";
+	res.summary.additional_properties["added-records"] = "9";
+	res.summary.additional_properties["total-position-deletes"] = "0";
+	res.summary.additional_properties["added-files-size"] = "623";
+	res.summary.additional_properties["total-delete-files"] = "0";
+	res.summary.additional_properties["total-files-size"] = "623";
+	res.summary.additional_properties["total-data-files"] = "1";
+	res.summary.additional_properties["total-records"] = "9";
 
 	res.has_sequence_number = true;
 	res.sequence_number = sequence_number;

@@ -1,8 +1,11 @@
+#include "include/metadata/iceberg_manifest.hpp"
 #include "metadata/iceberg_manifest.hpp"
 #include "storage/irc_table_set.hpp"
 
 #include "duckdb/storage/caching_file_system.hpp"
 #include "catalog_utils.hpp"
+#include "yyjson.hpp"
+#include "include/metadata/iceberg_manifest_list.hpp"
 #include "storage/iceberg_table_information.hpp"
 
 namespace duckdb {
@@ -34,6 +37,67 @@ Value IcebergManifestEntry::ToDataFileStruct(const LogicalType &type) const {
 	children.push_back(Value::BIGINT(record_count));
 	// file_size_in_bytes: long - 104
 	children.push_back(Value::BIGINT(file_size_in_bytes));
+	// sort order id
+	children.push_back(Value::INTEGER(sort_order_id));
+	// equality ids (null for now)
+	children.push_back(Value(LogicalType::LIST(LogicalType::INTEGER)));
+	// split_offsets (null for now)
+	children.push_back(Value(LogicalType::LIST(LogicalType::BIGINT)));
+	// key_metadata (null for now)
+	children.push_back(Value(LogicalType::BLOB));
+
+	child_list_t<LogicalType> bounds_types;
+	bounds_types.emplace_back("key", LogicalType::INTEGER);
+	bounds_types.emplace_back("value", LogicalType::BLOB);
+
+	vector<Value> lower_bounds_values;
+	// lower bounds: map<126: int, 127: binary> - 125
+	for (auto &child : lower_bounds) {
+		lower_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), lower_bounds_values));
+
+	vector<Value> upper_bounds_values;
+	// upper bounds: map<129: int, 130: binary> - 128
+	for (auto &child : upper_bounds) {
+		upper_bounds_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(bounds_types), upper_bounds_values));
+
+	// column sizes
+	child_list_t<LogicalType> map_int_to_bigint_types;
+	map_int_to_bigint_types.emplace_back("key", LogicalType::INTEGER);
+	map_int_to_bigint_types.emplace_back("value", LogicalType::BIGINT);
+
+	vector<Value> column_sizes_values;
+	// column_sizes: map<117: int, 118: binary> - 108
+	if (column_sizes.empty()) {
+	}
+	for (auto &child : column_sizes) {
+		column_sizes_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(map_int_to_bigint_types), column_sizes_values));
+
+	vector<Value> value_counts_values;
+	// value_counts: map<119: int, 120: binary> - 109
+	for (auto &child : value_counts) {
+		value_counts_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(map_int_to_bigint_types), value_counts_values));
+
+	vector<Value> null_value_counts_values;
+	// null_value_counts: map<121: int, 122: binary> - 110
+	for (auto &child : null_value_counts) {
+		null_value_counts_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(map_int_to_bigint_types), null_value_counts_values));
+
+	vector<Value> nan_value_counts_values;
+	// nan_value_counts: map<138: int, 139: binary> - 137
+	for (auto &child : nan_value_counts) {
+		nan_value_counts_values.push_back(Value::STRUCT({{"key", child.first}, {"value", child.second}}));
+	}
+	children.push_back(Value::MAP(LogicalType::STRUCT(map_int_to_bigint_types), nan_value_counts_values));
 
 	return Value::STRUCT(type, children);
 }
@@ -213,13 +277,315 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifestFile
 		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "long");
 	}
 
-	//! NOTE: These are optional but we should probably add them, to support better filtering
-	//! column_sizes
-	//! value_counts
-	//! null_value_counts
-	//! nan_value_counts
-	//! lower_bounds
-	//! upper_bounds
+	{
+		// sort_order_id: long - 140
+		children.emplace_back("sort_order_id", LogicalType::INTEGER);
+		data_file_field_ids.emplace_back("sort_order_id", Value::INTEGER(SORT_ORDER_ID));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", SORT_ORDER_ID);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "sort_order_id");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "int");
+	}
+
+	{
+		// child_list_t<LogicalType> equality_id_children;
+		// equality_id_children.emplace_back(LogicalType::INTEGER);
+		children.emplace_back("equality_ids", LogicalType::LIST(LogicalType::INTEGER));
+		;
+		// equality_ids: long - 140
+		child_list_t<Value> equality_field_ids;
+		equality_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(EQUALITY_IDS));
+		equality_field_ids.emplace_back("element", Value::INTEGER(EQUALITY_IDS_ELEMENT));
+
+		// auto equality_field_ids_values = Value::STRUCT(equality_field_ids);
+		// vector<Value> equality_field_ids_values_vector;
+		// equality_field_ids_values_vector.push_back(equality_field_ids_values);
+		//
+		// child_list_t<LogicalType> equality_field_ids_types;
+		// equality_field_ids_types.emplace_back("__duckdb_field_id", LogicalType::INTEGER);
+		// equality_field_ids_types.emplace_back("equality_ids", LogicalType::INTEGER);
+		// auto equality_field_ids_struct = LogicalType::STRUCT(equality_field_ids_types);
+
+		data_file_field_ids.emplace_back("equality_ids", Value::STRUCT(equality_field_ids));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", EQUALITY_IDS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "equality_ids`");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto equality_ids_obj = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, equality_ids_obj, "type", "array");
+		yyjson_mut_obj_add_strcpy(doc, equality_ids_obj, "items", "int");
+		yyjson_mut_obj_add_uint(doc, equality_ids_obj, "id", EQUALITY_IDS_ELEMENT);
+	}
+
+	{
+		// child_list_t<LogicalType> equality_id_children;
+		// equality_id_children.emplace_back(LogicalType::INTEGER);
+		children.emplace_back("split_offsets", LogicalType::LIST(LogicalType::BIGINT));
+		;
+		// split_offsets: long - 140
+		child_list_t<Value> split_offsets_values;
+		split_offsets_values.emplace_back("__duckdb_field_id", Value::INTEGER(SPLIT_OFFSETS));
+		split_offsets_values.emplace_back("element", Value::INTEGER(SPLIT_OFFSETS_ELEMENT));
+		//
+		// auto split_offsets_id_values = Value::STRUCT(split_offsets_values);
+		// vector<Value> split_offset_id_values_vector;
+		// split_offset_id_values_vector.push_back(split_offsets_id_values);
+		//
+		// child_list_t<LogicalType> split_offsets_logical_types;
+		// split_offsets_logical_types.emplace_back("__duckdb_field_id", LogicalType::INTEGER);
+		// split_offsets_logical_types.emplace_back("split_offsets", LogicalType::INTEGER);
+		// auto split_offsets_struct = LogicalType::STRUCT(split_offsets_logical_types);
+
+		data_file_field_ids.emplace_back("split_offsets", Value::STRUCT(split_offsets_values));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", SPLIT_OFFSETS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "split_offsets");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto equality_ids_obj = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, equality_ids_obj, "type", "array");
+		yyjson_mut_obj_add_strcpy(doc, equality_ids_obj, "items", "int");
+		yyjson_mut_obj_add_uint(doc, equality_ids_obj, "id", SPLIT_OFFSETS_ELEMENT);
+	}
+
+	{
+		// key_metadata: long - 131
+		children.emplace_back("key_metadata", LogicalType::BLOB);
+		data_file_field_ids.emplace_back("key_metadata", Value::INTEGER(131));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", 131);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "key_metadata");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", true);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "type", "bytes");
+	}
+
+	// lower bounds struct
+	child_list_t<LogicalType> bounds_fields;
+	bounds_fields.emplace_back("key", LogicalType::INTEGER);
+	bounds_fields.emplace_back("value", LogicalType::BLOB);
+	{
+		// child_list_t<Value> lower_bounds_field_ids;
+		// lower bounds: map<126: int, 127: binary> - 104
+		children.emplace_back("lower_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
+
+		child_list_t<Value> lower_bound_record_field_ids;
+		lower_bound_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(LOWER_BOUNDS));
+		lower_bound_record_field_ids.emplace_back("key", Value::INTEGER(LOWER_BOUNDS_KEY));
+		lower_bound_record_field_ids.emplace_back("value", Value::INTEGER(LOWER_BOUNDS_VALUE));
+
+		data_file_field_ids.emplace_back("lower_bounds", Value::STRUCT(lower_bound_record_field_ids));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", LOWER_BOUNDS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "lower_bounds");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto lower_bound_type_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, lower_bound_type_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, lower_bound_type_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "name",
+		                          StringUtil::Format("k%d_k%d", LOWER_BOUNDS_KEY, LOWER_BOUNDS_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", LOWER_BOUNDS_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "binary");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", LOWER_BOUNDS_VALUE);
+	}
+
+	// upper bounds struct
+	{
+		// child_list_t<Value> upper_bounds_field_ids;
+		// upper bounds: map<129: int, 130: binary>
+		children.emplace_back("upper_bounds", LogicalType::MAP(LogicalType::STRUCT(bounds_fields)));
+
+		child_list_t<Value> upper_bound_record_field_ids;
+		upper_bound_record_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(UPPER_BOUNDS));
+		upper_bound_record_field_ids.emplace_back("key", Value::INTEGER(UPPER_BOUNDS_KEY));
+		upper_bound_record_field_ids.emplace_back("value", Value::INTEGER(UPPER_BOUNDS_VALUE));
+
+		data_file_field_ids.emplace_back("upper_bounds", Value::STRUCT(upper_bound_record_field_ids));
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", UPPER_BOUNDS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "upper_bounds");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto upper_bound_type_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, upper_bound_type_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, upper_bound_type_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "name",
+		                          StringUtil::Format("k%d_k%d", UPPER_BOUNDS_KEY, UPPER_BOUNDS_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", UPPER_BOUNDS_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "binary");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", UPPER_BOUNDS_VALUE);
+	}
+
+	// map int to big int struct
+	// used for fields column_sizes, value_counts, null_value_counts, nan_value_counts
+	child_list_t<LogicalType> map_int_to_bigint;
+	map_int_to_bigint.emplace_back("key", LogicalType::INTEGER);
+	map_int_to_bigint.emplace_back("value", LogicalType::BIGINT);
+	{
+		// column_sizes: map<117: int, 118: long> - 108
+		children.emplace_back("column_sizes", LogicalType::MAP(LogicalType::STRUCT(map_int_to_bigint)));
+
+		child_list_t<Value> column_sizes_field_ids;
+		column_sizes_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(COLUMN_SIZES));
+		column_sizes_field_ids.emplace_back("key", Value::INTEGER(COLUMN_SIZES_KEY));
+		column_sizes_field_ids.emplace_back("value", Value::INTEGER(COLUMN_SIZES_VALUE));
+
+		data_file_field_ids.emplace_back("column_sizes", Value::STRUCT(column_sizes_field_ids));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", COLUMN_SIZES);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "column_sizes");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto column_sizes_fields_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, column_sizes_fields_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, column_sizes_fields_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "name",
+		                          StringUtil::Format("k%d_k%d", COLUMN_SIZES_KEY, COLUMN_SIZES_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", COLUMN_SIZES_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "long");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", COLUMN_SIZES_VALUE);
+	}
+
+	{
+		// value counts: map<119: int, 120: long> - 109
+		children.emplace_back("value_counts", LogicalType::MAP(LogicalType::STRUCT(map_int_to_bigint)));
+
+		child_list_t<Value> column_sizes_field_ids;
+		column_sizes_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(VALUE_COUNTS));
+		column_sizes_field_ids.emplace_back("key", Value::INTEGER(VALUE_COUNTS_KEY));
+		column_sizes_field_ids.emplace_back("value", Value::INTEGER(VALUE_COUNTS_VALUE));
+
+		data_file_field_ids.emplace_back("value_counts", Value::STRUCT(column_sizes_field_ids));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", VALUE_COUNTS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "value_counts");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto value_counts_fields_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, value_counts_fields_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, value_counts_fields_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "name",
+		                          StringUtil::Format("k%d_k%d", VALUE_COUNTS_KEY, VALUE_COUNTS_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", VALUE_COUNTS_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "long");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", VALUE_COUNTS_VALUE);
+	}
+
+	{
+		// null value counts: map<121: int, 122: long> - 110
+		children.emplace_back("null_value_counts", LogicalType::MAP(LogicalType::STRUCT(map_int_to_bigint)));
+
+		child_list_t<Value> column_sizes_field_ids;
+		column_sizes_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(NULL_VALUE_COUNTS));
+		column_sizes_field_ids.emplace_back("key", Value::INTEGER(NULL_VALUE_COUNTS_KEY));
+		column_sizes_field_ids.emplace_back("value", Value::INTEGER(NULL_VALUE_COUNTS_VALUE));
+
+		data_file_field_ids.emplace_back("null_value_counts", Value::STRUCT(column_sizes_field_ids));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", NULL_VALUE_COUNTS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "null_value_counts");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto null_value_counts_fields_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, null_value_counts_fields_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, null_value_counts_fields_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(
+		    doc, items_obj, "name",
+		    StringUtil::Format("k%d_k%d", NULL_VALUE_COUNTS_KEY, NULL_VALUE_COUNTS_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", NULL_VALUE_COUNTS_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "long");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", NULL_VALUE_COUNTS_VALUE);
+	}
+
+	{
+		// nan value counts: map<138: int, 139: long> - 137
+		children.emplace_back("nan_value_counts", LogicalType::MAP(LogicalType::STRUCT(map_int_to_bigint)));
+
+		child_list_t<Value> column_sizes_field_ids;
+		column_sizes_field_ids.emplace_back("__duckdb_field_id", Value::INTEGER(NAN_VALUE_COUNTS));
+		column_sizes_field_ids.emplace_back("key", Value::INTEGER(NAN_VALUE_COUNTS_KEY));
+		column_sizes_field_ids.emplace_back("value", Value::INTEGER(NAN_VALUE_COUNTS_VALUE));
+
+		data_file_field_ids.emplace_back("nan_value_counts", Value::STRUCT(column_sizes_field_ids));
+
+		auto field_obj = yyjson_mut_arr_add_obj(doc, child_fields_arr);
+		yyjson_mut_obj_add_uint(doc, field_obj, "id", NAN_VALUE_COUNTS);
+		yyjson_mut_obj_add_strcpy(doc, field_obj, "name", "nan_value_counts");
+		yyjson_mut_obj_add_bool(doc, field_obj, "required", false);
+
+		auto nan_value_counts_fields_struct = yyjson_mut_obj_add_obj(doc, field_obj, "type");
+		yyjson_mut_obj_add_strcpy(doc, nan_value_counts_fields_struct, "type", "array");
+		auto items_obj = yyjson_mut_obj_add_obj(doc, nan_value_counts_fields_struct, "items");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "type", "record");
+		yyjson_mut_obj_add_strcpy(doc, items_obj, "name",
+		                          StringUtil::Format("k%d_k%d", NAN_VALUE_COUNTS_KEY, NAN_VALUE_COUNTS_VALUE).c_str());
+		auto record_fields_arr = yyjson_mut_obj_add_arr(doc, items_obj, "fields");
+
+		auto key_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "name", "key");
+		yyjson_mut_obj_add_strcpy(doc, key_obj, "type", "int");
+		yyjson_mut_obj_add_uint(doc, key_obj, "id", NAN_VALUE_COUNTS_KEY);
+
+		auto val_obj = yyjson_mut_arr_add_obj(doc, record_fields_arr);
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "name", "value");
+		yyjson_mut_obj_add_strcpy(doc, val_obj, "type", "long");
+		yyjson_mut_obj_add_uint(doc, val_obj, "id", NAN_VALUE_COUNTS_VALUE);
+	}
 
 	{
 		// data_file: struct(...) - 2
@@ -253,9 +619,9 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifestFile
 		// status: int - 0
 		data.SetValue(col_idx++, i, Value::INTEGER(static_cast<int32_t>(data_file.status)));
 		// snapshot_id: long - 1
-		data.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+		data.SetValue(col_idx++, i, Value::BIGINT(data_file.snapshot_id));
 		// sequence_number: long - 3
-		data.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
+		data.SetValue(col_idx++, i, Value::BIGINT(data_file.sequence_number));
 		// file_sequence_number: long - 4
 		data.SetValue(col_idx++, i, Value(LogicalType::BIGINT));
 		// data_file: struct(...) - 2
@@ -279,7 +645,6 @@ idx_t WriteToFile(IcebergTableInformation &table_info, const IcebergManifestFile
 	copy_info.options["root_name"].push_back(Value("manifest_entry"));
 	copy_info.options["field_ids"].push_back(Value::STRUCT(field_ids));
 	copy_info.options["metadata"].push_back(metadata_map);
-
 	CopyFunctionBindInput input(copy_info);
 	input.file_extension = "avro";
 

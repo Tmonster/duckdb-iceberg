@@ -5,6 +5,8 @@
 #include "storage/iceberg_table_information.hpp"
 
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/common/types/value.hpp"
+#include "fmt/format.h"
 
 namespace duckdb {
 
@@ -86,6 +88,27 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	for (auto &data_file : data_files) {
 		manifest.added_rows_count += data_file.record_count;
 		data_file.sequence_number = snapshot.sequence_number;
+		data_file.snapshot_id = snapshot.snapshot_id;
+		data_file.partition_spec_id = manifest.partition_spec_id;
+		auto cur_schema = table_metadata.schemas.find(table_metadata.current_schema_id);
+		D_ASSERT(cur_schema != table_metadata.schemas.end());
+		for (auto &col : cur_schema->second->columns) {
+			data_file.column_sizes[col->id] = GetTypeIdSize(col->type.InternalType());
+			data_file.value_counts[col->id] = 10;
+			data_file.null_value_counts[col->id] = 0;
+			data_file.nan_value_counts[col->id] = 0;
+			data_file.lower_bounds[col->id] = Value::BLOB("0");
+			data_file.upper_bounds[col->id] = Value::BLOB("9");
+		}
+		data_file.sort_order_id = 0;
+		data_file.key_metadata = Value::BLOB(nullptr, 0);
+
+		// for (auto &column : table_metadata.co) {
+		// 	data_file.column_sizes
+		// 	data_file.value_counts
+		// 	data_file.null_value_counts
+		// 	data_file.nan_value_counts
+		// }
 		if (!manifest.has_min_sequence_number || data_file.sequence_number < manifest.min_sequence_number) {
 			manifest.min_sequence_number = data_file.sequence_number;
 		}

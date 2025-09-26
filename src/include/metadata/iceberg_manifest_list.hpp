@@ -46,9 +46,9 @@ public:
 		children.emplace_back("upper_bound", LogicalType::BLOB);
 		auto field_summary_struct = LogicalType::STRUCT(children);
 
-		if (!has_partitions) {
-			return Value(LogicalType::LIST(field_summary_struct));
-		}
+		// if (!has_partitions) {
+		// 	return Value(LogicalType::LIST(field_summary_struct));
+		// }
 		vector<Value> fields;
 		for (auto &field : field_summary) {
 			fields.push_back(field.ToValue());

@@ -173,7 +173,8 @@ static unique_ptr<HTTPResponse> GetTableMetadata(ClientContext &context, IRCatal
 	url_builder.AddPathComponent(table);
 
 	auto url = url_builder.GetURL();
-	return catalog.auth_handler->GetRequest(context, url_builder);
+	auto res = catalog.auth_handler->GetRequest(context, url_builder);
+	return res;
 }
 
 APIResult<rest_api_objects::LoadTableResult> IRCAPI::GetTable(ClientContext &context, IRCatalog &catalog,
