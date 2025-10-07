@@ -49,6 +49,20 @@ CREATE TABLE my_datalake.default.test AS SELECT i id FROM range(1000) t(i);
 statement ok
 INSERT INTO my_datalake.default.test SELECT i id FROM range(15000, 16000) t(i);
 
+query I
+DELETE FROM my_datalake.default.test WHERE id%2=0;
+----
+1000
+
+statement ok
+delete from my_datalake.default.test where id%3=0;
+
+query I
+select * from my_datalake.default.test where id%2=0 or id%3=0;
+----
+
+mode skip
+
 statement ok
 BEGIN
 
