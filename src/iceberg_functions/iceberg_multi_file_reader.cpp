@@ -3,6 +3,7 @@
 #include "iceberg_logging.hpp"
 #include "iceberg_predicate.hpp"
 #include "iceberg_value.hpp"
+#include "storage/iceberg_delete.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
@@ -274,8 +275,23 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 		    multi_file_list.current_transaction_delete_manifest != multi_file_list.transaction_delete_manifests.end()) {
 			multi_file_list.ProcessDeletes(global_columns, global_column_ids);
 		}
-		reader.deletion_filter = std::move(multi_file_list.GetPositionalDeletesForFile(file_path));
+		auto positional_deletes = multi_file_list.GetPositionalDeletesForFile(file_path);
+		if (positional_deletes && delete_map) {
+			delete_map->AddToDeleteMap(file_path, positional_deletes->GetDeleteData());
+		}
+		reader.deletion_filter = std::move(positional_deletes);
 	}
+	// The reader has a deletion filter
+	// If the filter is an equality filter, I just want to add an equality filter entry to the delete map
+
+	// If the filter is some kind of positional delete filter, I want to add a positional delete filter entry to the
+	// delete map the positional delete is dependent on the format version of the table as well.
+
+	// for (auto &positional_delete_data : multi_file_list.positional_delete_data) {
+	// 	IcebergFileListExtendedEntry wat;
+	// 	wat.file.path = positional_delete_data.first;
+	// 	delete_map->AddExtendedFileInfo(wat);
+	// }
 
 	auto &local_columns = reader_data.reader->columns;
 	auto &metadata = multi_file_list.GetMetadata();

@@ -28,8 +28,13 @@ public:
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) override;
 
 public:
+	// Manifest Entry containing entries to the newly written data files.
 	IcebergManifestFile manifest_file;
+
+	// Top level Manifest List file. Has entries that are IcebergManifestEntries
 	IcebergManifestList manifest_list;
+
+	// one entry in the top level manifest list
 	IcebergManifest manifest;
 
 	IcebergSnapshot snapshot;

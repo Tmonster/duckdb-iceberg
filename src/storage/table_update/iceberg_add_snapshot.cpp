@@ -1,4 +1,7 @@
 #include "storage/table_update/iceberg_add_snapshot.hpp"
+
+#include "../../include/metadata/iceberg_manifest_list.hpp"
+#include "../../include/metadata/iceberg_snapshot.hpp"
 #include "storage/irc_table_set.hpp"
 
 #include "duckdb/common/enums/catalog_type.hpp"
@@ -45,6 +48,29 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	manifest.manifest_length = manifest_length;
 
 	D_ASSERT(manifest_list.manifests.empty());
+	// if this is a delete snapshot, there is more involved.
+	// we need to add all manifests where not a single delete is updated
+	//    this will include equality delete files
+	// if a delete file has been updated, we need to rewrite all entries in that manifest list.
+	///
+	if (snapshot.operation == IcebergSnapshotOperationType::DELETE) {
+		// only copy
+		for (auto &prev_manifest : commit_state.manifests) {
+			if (prev_manifest.content == IcebergManifestContentType::DATA) {
+				manifest_list.manifests.push_back(std::move(prev_manifest));
+			}
+		}
+		// now push back this manifest (which contains delete info)
+		manifest_list.manifests.push_back(std::move(manifest));
+		manifest_list::WriteToFile(manifest_list, avro_copy, db, context);
+		commit_state.manifests = std::move(manifest_list.manifests);
+		commit_state.table_change.updates.push_back(CreateAddSnapshotUpdate(snapshot));
+		return;
+	}
+	// here we need to perform a check on what manifests we want to copy over.
+	// for delete snapshots, we don't want to copy manifests, or the manifest lists over
+	// we are overwriting the delete files, so they are outdated, and we can just write the parquet
+	// files in the new manifest list, and that is also fine.
 	manifest_list.manifests = std::move(commit_state.manifests);
 	manifest_list.manifests.push_back(std::move(manifest));
 	manifest_list::WriteToFile(manifest_list, avro_copy, db, context);

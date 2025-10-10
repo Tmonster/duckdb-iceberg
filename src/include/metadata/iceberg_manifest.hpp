@@ -100,6 +100,18 @@ public:
 	vector<IcebergManifestEntry> data_files;
 };
 
+struct IcebergManifestFileHash {
+	std::size_t operator()(const IcebergManifestFile &manifest) const noexcept {
+		return std::hash<std::string> {}(manifest.path);
+	}
+};
+
+struct IcebergManifestFileEq {
+	bool operator()(const IcebergManifestFile &a, const IcebergManifestFile &b) const {
+		return a.path == b.path;
+	}
+};
+
 namespace manifest_file {
 
 static constexpr const int32_t STATUS = 0;

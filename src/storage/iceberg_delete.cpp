@@ -221,8 +221,13 @@ void IcebergDelete::FlushDelete(IRCTransaction &transaction, ClientContext &cont
 	delete_file.data_file_path = filename;
 	// check if the file already has deletes
 	auto existing_delete_data = delete_map->GetDeleteData(filename);
-	// FIXME: merge with existing delete data for the same data file for faster reads.
-	D_ASSERT(!existing_delete_data);
+	// Merge with existing delete data for the same data file for faster reads.
+	if (existing_delete_data) {
+		for (auto &row_idx : existing_delete_data->deleted_rows) {
+			sorted_deletes.insert(row_idx);
+		}
+		delete_map->SetEntryAsModified(filename);
+	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	string delete_file_uuid = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes.parquet";
@@ -272,6 +277,16 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 
 		iceberg_delete_files.push_back(std::move(manifest_entry));
 	}
+
+	auto extra_manifest_entries = delete_map->GetManifestFilesWithModifiedEntries();
+	// Also include what manifest list entries need to be included in the new snapshot
+
+	// the moment a manifest file entry is updated, all other entries in the manifest file should be added
+	// to the new manifest file.
+
+	// Also pass what manifest entries need to be included in the new manifest file.
+	// All data manifest entries must be included, delete manifest entries can be excluded
+	// but delete manifest entries with equality filters should be included.
 	table_info.AddDeleteSnapshot(transaction, std::move(iceberg_delete_files));
 	transaction.MarkTableAsDirty(irc_table);
 	return SinkFinalizeType::READY;

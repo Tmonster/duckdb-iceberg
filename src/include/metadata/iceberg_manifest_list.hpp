@@ -122,6 +122,18 @@ public:
 	}
 };
 
+struct IcebergManifestHash {
+	std::size_t operator()(const IcebergManifest &manifest) const noexcept {
+		return std::hash<std::string> {}(manifest.manifest_path);
+	}
+};
+
+struct IcebergManifestEq {
+	bool operator()(const IcebergManifest &a, const IcebergManifest &b) const {
+		return a.manifest_path == b.manifest_path;
+	}
+};
+
 struct IcebergManifestList {
 public:
 	IcebergManifestList(const string &path) : path(path) {

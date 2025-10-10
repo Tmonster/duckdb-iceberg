@@ -3,7 +3,8 @@
 #include "iceberg_logging.hpp"
 #include "iceberg_predicate.hpp"
 #include "iceberg_value.hpp"
-#include "../include/storage/irc_table_entry.hpp"
+#include "storage/iceberg_delete_filter.hpp"
+#include "storage/irc_table_entry.hpp"
 #include "storage/irc_transaction.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
@@ -635,8 +636,6 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 			delete_manifest_reader->Read(STANDARD_VECTOR_SIZE, manifest_file.data_files);
 		}
 
-		current_delete_manifest++;
-
 		for (auto &entry : manifest_file.data_files) {
 			if (StringUtil::CIEquals(entry.file_format, "parquet")) {
 				ScanDeleteFile(entry, global_columns, column_indexes);
@@ -768,9 +767,10 @@ void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,
 			result.Reset();
 			parquet_scan.function(context, function_input, result);
 			result.Flatten();
-			ScanPositionalDeleteFile(result);
+			ScanPositionalDeleteFile(result, delete_file_path);
 		} while (result.size() != 0);
 	} else if (entry.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+		// manifest_entries_with_equality_deletes.push_back(entry);
 		do {
 			TableFunctionInput function_input(bind_data.get(), local_state.get(), global_state.get());
 			result.Reset();
@@ -783,7 +783,7 @@ void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,
 }
 
 //! FIXME: isn't this problematic if we need to scan the same delete file multiple times??
-unique_ptr<DeleteFilter> IcebergMultiFileList::GetPositionalDeletesForFile(const string &file_path) const {
+unique_ptr<IcebergDeleteFilter> IcebergMultiFileList::GetPositionalDeletesForFile(const string &file_path) const {
 	auto it = positional_delete_data.find(file_path);
 	if (it != positional_delete_data.end()) {
 		// There is delete data for this file, return it

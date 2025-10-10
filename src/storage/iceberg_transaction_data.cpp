@@ -21,6 +21,9 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
                                          vector<IcebergManifestEntry> &&data_files) {
 	D_ASSERT(!data_files.empty());
 
+	if (operation == IcebergSnapshotOperationType::DELETE) {
+		auto break_here = 0;
+	}
 	//! Generate a new snapshot id
 	auto &table_metadata = table_info.table_metadata;
 	auto snapshot_id = NewSnapshotId();
@@ -102,6 +105,8 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		manifest.has_min_sequence_number = true;
 	}
 	manifest.added_snapshot_id = snapshot.snapshot_id;
+	// for a delete snapshot, if we want to only have one manifest file that lists all data files, that needs to happen
+	// here.
 	manifest_file.data_files.insert(manifest_file.data_files.end(), std::make_move_iterator(data_files.begin()),
 	                                std::make_move_iterator(data_files.end()));
 	alters.push_back(*add_snapshot);

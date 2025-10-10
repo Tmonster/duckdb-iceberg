@@ -22,12 +22,16 @@ struct IcebergDeleteMap {
 
 	void AddExtendedFileInfo(IcebergFileListExtendedEntry file_entry) {
 		auto filename = file_entry.file.path;
-		file_map.emplace(std::move(filename), std::move(file_entry));
+		data_file_to_extended_file_info.emplace(std::move(filename), std::move(file_entry));
+	}
+
+	void AddToDeleteMap(const string filename, shared_ptr<IcebergDeleteData> delete_data) {
+		delete_data_map.emplace(filename, delete_data);
 	}
 
 	IcebergFileListExtendedEntry GetExtendedFileInfo(const string &filename) {
-		auto delete_entry = file_map.find(filename);
-		if (delete_entry == file_map.end()) {
+		auto delete_entry = data_file_to_extended_file_info.find(filename);
+		if (delete_entry == data_file_to_extended_file_info.end()) {
 			throw InternalException("Could not find matching file for written delete file");
 		}
 		return delete_entry->second;
@@ -42,14 +46,47 @@ struct IcebergDeleteMap {
 		return entry->second.get();
 	}
 
+	void SetEntryAsModified(const string &data_filename) {
+		lock_guard<mutex> guard(lock);
+		// auto &manifest_entries =  data_file_to_manifest_file.find(filename);
+		// D_ASSERT(manifest_file);
+		// dirty_manifests.push_back(manifest_file);
+		Printer::Print("given some delete file (-deletes.parquet), indicate the all entries in this manifest file need "
+		               "to be written when the iceberg delete is finalized.");
+	}
+
+	unordered_set<IcebergManifestFile, IcebergManifestFileHash, IcebergManifestFileEq>
+	GetManifestFilesWithModifiedEntries() {
+		Printer::Print("Return list of manifest entries that are listed in a manifest file that has a "
+		               "manifest_file_entry that has been updated");
+		return dirty_manifests;
+	}
+
 private:
 	mutex lock;
-	// still need some way to know if we are deleting an extra row or not.
-	// ???
 	// stores information about positional deletes
 	unordered_map<string, shared_ptr<IcebergDeleteData>> delete_data_map;
-	// stores information about a data file
-	unordered_map<string, IcebergFileListExtendedEntry> file_map;
+	// data_file to extended file info
+	// extended file info stores the delete file information.
+	unordered_map<string, IcebergFileListExtendedEntry> data_file_to_extended_file_info;
+
+	// delete manifest entries to write in the new Manifest File
+	// unordered_set<optional_ptr<IcebergManifestEntry>> to_be_written_delete_entries;
+
+	// delete file (i.e '-delete.[puffin|parquet]') to the extra manifest entry information.
+	// FIXME: this may not be needed, you can use `delete_file_to_manifest_file` and the delete file
+	//        string to find the ManifestEntry Information
+	// unordered_map<string, vector<optional_ptr<IcebergManifestEntry>>> data_file_to_manifest_entry;
+	// data file
+	// delete file (i.e '-delete.[puffin|parquet]') to the manifest file information (which contains the manifest
+	// entries)
+	unordered_map<string, IcebergManifestFile> data_file_to_manifest_file;
+
+	// a map of a IcebergManifestEntry to the Iceberg Manifest it is listed in.
+	// unordered_map<IcebergManifestEntry, IcebergManifest> delete_manifest_entry_to_manifest_file;
+
+	// need to know which IcebergManifestFiles need to be written in the delete update
+	unordered_set<IcebergManifestFile, IcebergManifestFileHash, IcebergManifestFileEq> dirty_manifests;
 };
 
 struct WrittenColumnInfo {

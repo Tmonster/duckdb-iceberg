@@ -43,7 +43,7 @@ public:
 
 	void Bind(vector<LogicalType> &return_types, vector<string> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters) const;
-	void ScanPositionalDeleteFile(DataChunk &result) const;
+	void ScanPositionalDeleteFile(DataChunk &result, const string &delete_file_name) const;
 	void ScanEqualityDeleteFile(const IcebergManifestEntry &entry, DataChunk &result,
 	                            vector<MultiFileColumnDefinition> &columns,
 	                            const vector<MultiFileColumnDefinition> &global_columns,
@@ -51,7 +51,7 @@ public:
 	void ScanDeleteFile(const IcebergManifestEntry &entry, const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
 	void ScanPuffinFile(const IcebergManifestEntry &entry) const;
-	unique_ptr<DeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
+	unique_ptr<IcebergDeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
 	void ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
 	vector<IcebergFileListExtendedEntry> GetFilesExtended(ClientContext &context, ICTableEntry &table);
@@ -103,6 +103,7 @@ public:
 	vector<IcebergManifestEntry> data_files;
 	vector<IcebergManifest> data_manifests;
 	vector<IcebergManifest> delete_manifests;
+
 	vector<reference<IcebergManifestFile>> transaction_data_manifests;
 	vector<reference<IcebergManifestFile>> transaction_delete_manifests;
 	idx_t transaction_data_idx = 0;
@@ -116,7 +117,7 @@ public:
 	vector<IcebergManifestEntry> current_data_files;
 
 	//! For each file that has a delete file, the state for processing that/those delete file(s)
-	mutable case_insensitive_map_t<unique_ptr<DeleteFilter>> positional_delete_data;
+	mutable case_insensitive_map_t<unique_ptr<IcebergDeleteFilter>> positional_delete_data;
 	//! All equality deletes with sequence numbers higher than that of the data_file apply to that data_file
 	mutable map<sequence_number_t, unique_ptr<IcebergEqualityDeleteData>> equality_delete_data;
 	mutable mutex delete_lock;

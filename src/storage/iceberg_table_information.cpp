@@ -252,7 +252,9 @@ void IcebergTableInformation::AddSnapshot(IRCTransaction &transaction, vector<Ic
 void IcebergTableInformation::AddDeleteSnapshot(IRCTransaction &transaction,
                                                 vector<IcebergManifestEntry> &&data_files) {
 	InitTransactionData(transaction);
-
+	// Here we also need to pass more information about what manifest(s) and manifest entries can be included in the new
+	// manifest.
+	// adding deletes and merging positional delete data is a legit nightmare.
 	transaction_data->AddSnapshot(IcebergSnapshotOperationType::DELETE, std::move(data_files));
 }
 
