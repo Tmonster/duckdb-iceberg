@@ -205,7 +205,7 @@ void IcebergDelete::FlushDelete(IRCTransaction &transaction, ClientContext &cont
                                 vector<idx_t> &deleted_rows) const {
 
 	// find the matching data file for the deletion
-	auto data_file_info = delete_map->GetExtendedFileInfo(filename);
+	auto &data_file_info = delete_map->GetExtendedFileInfo(filename);
 
 	// sort and duplicate eliminate the deletes
 	set<idx_t> sorted_deletes;
@@ -229,13 +229,25 @@ void IcebergDelete::FlushDelete(IRCTransaction &transaction, ClientContext &cont
 		delete_map->SetEntryAsModified(filename);
 	}
 
+	// get other data files that are share positional deletes present in the same file
+	// as the existing delete data
+	// ie.
+	// |. filename     | pos |
+	// | data1.parquet | 1   |
+	// | data2.parquet | 2   |
+	// data 2 needs to be flushed now as well.
+
 	auto &fs = FileSystem::GetFileSystem(context);
 	string delete_file_uuid = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes.parquet";
 	string delete_file_path =
 	    fs.JoinPath(table.table_info.table_metadata.location, fs.JoinPath("data", delete_file_uuid));
 
+	// add new delete file name to the extended info
+	delete_map->AddNewDeleteFileName(filename, delete_file_path);
 	delete_file.file_name = delete_file_path;
+
 	WritePositionalDeleteFile(context, global_state, filename, delete_file, sorted_deletes);
+	delete_map->MarkDataFileDirty(filename);
 }
 
 SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
@@ -254,6 +266,9 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 		}
 		FlushDelete(irc_transaction, context, global_state, entry.first, entry.second);
 	}
+
+	auto foo = delete_map->GetDataFilesThatNeedANewDeleteFile();
+
 	auto &irc_table = table.Cast<ICTableEntry>();
 	auto &table_info = irc_table.table_info;
 	auto &transaction = IRCTransaction::Get(context, table.catalog);

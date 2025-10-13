@@ -14,6 +14,15 @@ public:
 public:
 	static unique_ptr<IcebergDeletionVector> FromBlob(data_ptr_t blob_start, idx_t blob_length);
 
+	void AddDeleteFileName(const string &filename) override {
+		throw InternalException("should not add delete file name to pos delete data here");
+		// if (!delete_data->old_delete_file_names.empty()) {
+		// 	auto &first_file_name = *(delete_data->old_delete_file_names.begin());
+		// 	throw InternalException("current data file already has delete data in file %s. We should not have another data file", first_file_name);
+		// }
+		// delete_data->old_delete_file_names.insert(filename);
+	}
+
 public:
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) override;
 

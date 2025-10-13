@@ -18,32 +18,90 @@
 
 namespace duckdb {
 
+struct IcebergDeleteData {
+	// the rows deleted from that file after reading all the positional delete data
+	unordered_set<int64_t> deleted_rows;
+
+	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) const;
+};
+
+struct IcebergFileListExtendedEntry {
+	// the parquet file with the data
+	string data_file_name;
+
+	// the actual delete data (i.e deleted rows)
+	shared_ptr<IcebergDeleteData> delete_data;
+
+	// the parquet file(s) with the delete data. Multiple positional delete files can refer to one data file.
+	unordered_set<string> old_delete_file_names;
+
+	// new delete file name (if a delete operation is occuring).
+	string new_delete_file_name;
+
+	IcebergFileData file;
+	IcebergDeleteFileInfo delete_file;
+	idx_t row_count;
+	idx_t delete_count = 0;
+};
+
+
 struct IcebergDeleteMap {
 
 	void AddExtendedFileInfo(IcebergFileListExtendedEntry file_entry) {
 		auto filename = file_entry.file.path;
+		// if (filename == "s3://warehouse/default/one_delete_file_multiple_data_files/data/00000-8-4a11d8ac-edf0-4d2d-939c-3e20bf3d5482-00001.parquet") {
+		// 	auto break_here = 0;
+		// }
 		data_file_to_extended_file_info.emplace(std::move(filename), std::move(file_entry));
 	}
 
-	void AddToDeleteMap(const string filename, shared_ptr<IcebergDeleteData> delete_data) {
-		delete_data_map.emplace(filename, delete_data);
+	void AddDeleteFileNameToDeleteDataEntry(string &data_file_name, const string &delete_file_name) {
+		if (data_file_to_extended_file_info.find(data_file_name) == data_file_to_extended_file_info.end()) {
+			// a delete file has delete infromation for a data file we are not scanning.
+			// add it to our delete map anyway, and later on we will make a delete file for it
+			data_file_to_extended_file_info[data_file_name] = IcebergFileListExtendedEntry();
+		}
+		data_file_to_extended_file_info[data_file_name].old_delete_file_names.insert(delete_file_name);
 	}
 
-	IcebergFileListExtendedEntry GetExtendedFileInfo(const string &filename) {
-		auto delete_entry = data_file_to_extended_file_info.find(filename);
-		if (delete_entry == data_file_to_extended_file_info.end()) {
+	// for a datafile, add the new delete file name to the extended file info
+	void AddNewDeleteFileName(const string &data_file_name, const string &new_delete_file_name) {
+		if (data_file_to_extended_file_info.find(data_file_name) == data_file_to_extended_file_info.end()) {
+			throw InternalException("Could not find delete map entry for data file %s", data_file_name.c_str());
+		}
+		auto &extended_file_info = data_file_to_extended_file_info[data_file_name];
+		extended_file_info.new_delete_file_name = new_delete_file_name;
+	}
+
+	void AddToDeleteMap(const string filename, shared_ptr<IcebergDeleteData> delete_data) {
+		if (data_file_to_extended_file_info.find(filename) == data_file_to_extended_file_info.end()) {
+			throw InternalException("We should not be here 2");
+		}
+		auto &extended_delete_info = data_file_to_extended_file_info.find(filename)->second;
+		Printer::Print("check if positional delete data is merged. It should be");
+		extended_delete_info.delete_data = delete_data;
+	}
+
+	IcebergFileListExtendedEntry &GetExtendedFileInfo(const string &filename) {
+		auto extended_file_info = data_file_to_extended_file_info.find(filename);
+		if (extended_file_info == data_file_to_extended_file_info.end()) {
 			throw InternalException("Could not find matching file for written delete file");
 		}
-		return delete_entry->second;
+		return extended_file_info->second;
 	}
 
 	optional_ptr<IcebergDeleteData> GetDeleteData(const string &filename) {
 		lock_guard<mutex> guard(lock);
-		auto entry = delete_data_map.find(filename);
-		if (entry == delete_data_map.end()) {
+		auto entry = data_file_to_extended_file_info.find(filename);
+		if (entry == data_file_to_extended_file_info.end()) {
+			throw InternalException("Could not find matching file for deleted data");
 			return nullptr;
 		}
-		return entry->second.get();
+		return entry->second.delete_data;
+	}
+
+	void AddPosDeleteInfo(string positional_delete_filename, string data_file_name) {
+		positional_delete_file_to_data_files[positional_delete_filename].insert(data_file_name);
 	}
 
 	void SetEntryAsModified(const string &data_filename) {
@@ -62,13 +120,56 @@ struct IcebergDeleteMap {
 		return dirty_manifests;
 	}
 
+	void GetStaleDataFiles(const string &pos_delete_filename, unordered_set<string> &result) {
+		auto data_files_in_pos_delete_file = positional_delete_file_to_data_files.find(pos_delete_filename);
+		if (data_files_in_pos_delete_file == positional_delete_file_to_data_files.end()) {
+			throw InternalException("why is there no data here");
+		}
+		for (auto &data_file : data_files_in_pos_delete_file->second) {
+			auto extended_info = data_file_to_extended_file_info.find(data_file);
+			if (extended_info == data_file_to_extended_file_info.end()) {
+				throw InternalException("Could not find matching file for reading data file");
+			}
+			if (extended_info->second.new_delete_file_name.empty()) {
+				result.insert(data_file);
+			}
+		}
+	}
+
+	unordered_set<string> GetDataFilesThatNeedANewDeleteFile() {
+		unordered_set<string> result;
+		for (auto &entry : dirty_data_files) {
+			auto extended_delete_info = data_file_to_extended_file_info.find(entry);
+			if (extended_delete_info == data_file_to_extended_file_info.end()) {
+				throw InternalException("we should not be here");
+			}
+			auto pos_delete_files = extended_delete_info->second.old_delete_file_names;
+			for (auto &pos_delete_file : pos_delete_files) {
+				GetStaleDataFiles(pos_delete_file, result);
+			}
+		}
+		return result;
+	}
+
+	void MarkDataFileDirty(const string &data_file) {
+		dirty_data_files.insert(data_file);
+	}
+
 private:
 	mutex lock;
-	// stores information about positional deletes
-	unordered_map<string, shared_ptr<IcebergDeleteData>> delete_data_map;
+
 	// data_file to extended file info
 	// extended file info stores the delete file information.
 	unordered_map<string, IcebergFileListExtendedEntry> data_file_to_extended_file_info;
+
+	// positional delete file name to data_file_names
+	unordered_map<string, unordered_set<string>> positional_delete_file_to_data_files;
+
+	// all data files that have a new delete file from the delete operation
+	// This is used to find all data files that do not have new deletes, but because their deletes
+	// are in a pos_delete file with other data files, we need to write a new delete file for them
+	unordered_set<string> dirty_data_files;
+
 
 	// delete manifest entries to write in the new Manifest File
 	// unordered_set<optional_ptr<IcebergManifestEntry>> to_be_written_delete_entries;
@@ -127,6 +228,7 @@ public:
 		auto &global_entry = deleted_rows[local_state.current_file_name];
 		global_entry.insert(global_entry.end(), local_entry.begin(), local_entry.end());
 		total_deleted_count += local_entry.size();
+		filenames.insert(local_state.current_file_name);
 		local_entry.clear();
 	}
 

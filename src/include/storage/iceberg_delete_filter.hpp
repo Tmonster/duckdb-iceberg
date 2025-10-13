@@ -10,17 +10,13 @@
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "storage/iceberg_metadata_info.hpp"
+#include "storage/iceberg_delete.hpp"
 
 namespace duckdb {
 
-struct IcebergDeleteData {
-	// the parquet file with the data
-	string delete_file_name;
-	// the rows deleted from that file after reading all the positional delete data
-	unordered_set<int64_t> deleted_rows;
+struct IcebergDeleteMap;
 
-	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) const;
-};
+struct IcebergDeleteData;
 
 class IcebergDeleteFilter : public DeleteFilter {
 public:
@@ -34,6 +30,7 @@ protected:
 
 public:
 	virtual idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) = 0;
+	virtual void AddDeleteFileName(const string &filename) = 0;
 	void Initialize(ClientContext &context, const IcebergFileData &delete_file);
 	void SetMaxRowCount(idx_t max_row_count);
 	shared_ptr<IcebergDeleteData> GetDeleteData() const {
@@ -41,7 +38,7 @@ public:
 	}
 
 private:
-	static vector<idx_t> ScanDeleteFile(ClientContext &context, const IcebergFileData &delete_file);
+	static vector<idx_t> ScanDeleteFile(ClientContext &context, const IcebergFileData &delete_file, shared_ptr<IcebergDeleteMap> delete_map);
 };
 
 } // namespace duckdb

@@ -2,3 +2,4 @@ pyspark==3.5.0
 duckdb
 pyiceberg
 pyarrow
+pytest

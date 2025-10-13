@@ -7,13 +7,21 @@ namespace duckdb {
 
 class IcebergPositionalDeleteData : public IcebergDeleteFilter {
 public:
-	IcebergPositionalDeleteData(const string delete_file_path) : IcebergDeleteFilter() {
-		delete_data->delete_file_name = delete_file_path;
+	IcebergPositionalDeleteData(const string data_file_name) : IcebergDeleteFilter() {
 	}
 
 public:
 	void AddRow(int64_t row_id) {
 		delete_data->deleted_rows.insert(row_id);
+	}
+
+	bool HasRow(int64_t row_id) {
+		return delete_data->deleted_rows.find(row_id) != delete_data->deleted_rows.end();
+	}
+
+	void AddDeleteFileName(const string &filename) override {
+		throw InternalException("should not add delete file name to pos delete data here");
+		// delete_data->old_delete_file_names.insert(filename);
 	}
 
 	idx_t Filter(row_t start_row_index, idx_t count, SelectionVector &result_sel) override {

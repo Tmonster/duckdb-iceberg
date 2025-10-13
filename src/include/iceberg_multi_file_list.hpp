@@ -14,6 +14,7 @@
 #include "iceberg_metadata.hpp"
 #include "iceberg_utils.hpp"
 #include "manifest_reader.hpp"
+#include "storage/iceberg_delete.hpp"
 
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/common/list.hpp"
@@ -43,17 +44,17 @@ public:
 
 	void Bind(vector<LogicalType> &return_types, vector<string> &names);
 	unique_ptr<IcebergMultiFileList> PushdownInternal(ClientContext &context, TableFilterSet &new_filters) const;
-	void ScanPositionalDeleteFile(DataChunk &result, const string &delete_file_name) const;
+	void ScanPositionalDeleteFile(DataChunk &result, const string &delete_file_name, shared_ptr<IcebergDeleteMap> delete_map) const;
 	void ScanEqualityDeleteFile(const IcebergManifestEntry &entry, DataChunk &result,
 	                            vector<MultiFileColumnDefinition> &columns,
 	                            const vector<MultiFileColumnDefinition> &global_columns,
 	                            const vector<ColumnIndex> &column_indexes) const;
 	void ScanDeleteFile(const IcebergManifestEntry &entry, const vector<MultiFileColumnDefinition> &global_columns,
-	                    const vector<ColumnIndex> &column_indexes) const;
+	                    const vector<ColumnIndex> &column_indexes, shared_ptr<IcebergDeleteMap> delete_map) const;
 	void ScanPuffinFile(const IcebergManifestEntry &entry) const;
 	unique_ptr<IcebergDeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
 	void ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
-	                    const vector<ColumnIndex> &column_indexes) const;
+	                    const vector<ColumnIndex> &column_indexes, shared_ptr<IcebergDeleteMap> delete_map) const;
 	vector<IcebergFileListExtendedEntry> GetFilesExtended(ClientContext &context, ICTableEntry &table);
 
 public:

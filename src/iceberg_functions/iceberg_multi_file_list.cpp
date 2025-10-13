@@ -3,6 +3,8 @@
 #include "iceberg_logging.hpp"
 #include "iceberg_predicate.hpp"
 #include "iceberg_value.hpp"
+#include "storage/iceberg_delete.hpp"
+#include "storage/iceberg_delete_filter.hpp"
 #include "storage/iceberg_delete_filter.hpp"
 #include "storage/irc_table_entry.hpp"
 #include "storage/irc_transaction.hpp"
@@ -10,6 +12,7 @@
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
@@ -608,7 +611,7 @@ void IcebergMultiFileList::InitializeFiles(lock_guard<mutex> &guard) {
 }
 
 void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
-                                          const vector<ColumnIndex> &column_indexes) const {
+                                          const vector<ColumnIndex> &column_indexes, shared_ptr<IcebergDeleteMap> delete_map) const {
 	// In <=v2 we now have to process *all* delete manifests
 	// before we can be certain that we have all the delete data for the current file.
 
@@ -638,7 +641,7 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 
 		for (auto &entry : manifest_file.data_files) {
 			if (StringUtil::CIEquals(entry.file_format, "parquet")) {
-				ScanDeleteFile(entry, global_columns, column_indexes);
+				ScanDeleteFile(entry, global_columns, column_indexes, delete_map);
 			} else if (StringUtil::CIEquals(entry.file_format, "puffin")) {
 				ScanPuffinFile(entry);
 			} else {
@@ -647,12 +650,13 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 				    entry.file_format);
 			}
 		}
+		++current_delete_manifest;
 	}
 
 	while (current_transaction_delete_manifest != transaction_delete_manifests.end()) {
 		for (auto &entry : current_transaction_delete_manifest->get().data_files) {
 			if (StringUtil::CIEquals(entry.file_format, "parquet")) {
-				ScanDeleteFile(entry, global_columns, column_indexes);
+				ScanDeleteFile(entry, global_columns, column_indexes, delete_map);
 			} else if (StringUtil::CIEquals(entry.file_format, "puffin")) {
 				ScanPuffinFile(entry);
 			} else {
@@ -682,8 +686,8 @@ vector<IcebergFileListExtendedEntry> IcebergMultiFileList::GetFilesExtended(Clie
 		foo.row_count = file.record_count;
 		result.emplace_back(std::move(foo));
 	}
+	// FIXME: Also get delete file information here instead of when processing deletes.
 	// Also add delete file information?
-
 	// for (auto &file )
 	// does this transaction have already written delete or insert files?
 	// for (auto &file : transaction_local_files) {
@@ -711,7 +715,8 @@ vector<IcebergFileListExtendedEntry> IcebergMultiFileList::GetFilesExtended(Clie
 
 void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,
                                           const vector<MultiFileColumnDefinition> &global_columns,
-                                          const vector<ColumnIndex> &column_indexes) const {
+                                          const vector<ColumnIndex> &column_indexes,
+                                          shared_ptr<IcebergDeleteMap> delete_map) const {
 	const auto &delete_file_path = entry.file_path;
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	//! FIXME: delete files could also be made without row_ids,
@@ -763,11 +768,19 @@ void IcebergMultiFileList::ScanDeleteFile(const IcebergManifestEntry &entry,
 
 	if (entry.content == IcebergManifestEntryContentType::POSITION_DELETES) {
 		do {
+			auto blah = local_state.get();
+
+			auto &blah_multi_file_State = blah->Cast<MultiFileLocalState>();
+			auto &blah_local_state = blah_multi_file_State.local_state;
+			// auto &wat = blah_local_state->Cast<ParquetReaderScanState>();
+			// auto foo = blah_local_state.scan_state.offset_in_group;
+
 			TableFunctionInput function_input(bind_data.get(), local_state.get(), global_state.get());
 			result.Reset();
 			parquet_scan.function(context, function_input, result);
 			result.Flatten();
-			ScanPositionalDeleteFile(result, delete_file_path);
+			ScanPositionalDeleteFile(result, delete_file_path, delete_map);
+			auto a = 0;
 		} while (result.size() != 0);
 	} else if (entry.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
 		// manifest_entries_with_equality_deletes.push_back(entry);
