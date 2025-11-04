@@ -23,30 +23,43 @@ optional_ptr<CatalogEntry> IRCSchemaSet::GetEntry(ClientContext &context, const 
 	if (entry != entries.end()) {
 		return entry->second.get();
 	}
-	if (!verify_existence) {
-		if (if_not_found == OnEntryNotFound::RETURN_NULL) {
-			return nullptr;
-		}
-		throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
-	}
-	if (entry == entries.end()) {
-		CreateSchemaInfo info;
-		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
-			if (if_not_found == OnEntryNotFound::RETURN_NULL) {
-				return nullptr;
-			} else {
-				throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
-			}
-		}
-		info.schema = name;
-		info.internal = false;
-		auto schema_entry = make_uniq<IRCSchemaEntry>(catalog, info);
-		schema_entry->namespace_items = IRCAPI::ParseSchemaName(name);
-		CreateEntryInternal(context, std::move(schema_entry));
-		entry = entries.find(name);
-		D_ASSERT(entry != entries.end());
-	}
-	return entry->second.get();
+
+	// create a table entry with fake schema data to avoid calling the LoadTableInformation endpoint for every
+	// table while listing schemas
+	CreateSchemaInfo info;
+	info.type = CatalogType::SCHEMA_ENTRY;
+	info.catalog = ic_catalog.GetName();
+	info.schema = name;
+	info.internal = false;
+	auto schema_entry = make_uniq<IRCSchemaEntry>(catalog, info);
+	schema_entry->namespace_items = IRCAPI::ParseSchemaName(name);
+	auto foo = CreateEntryInternal(context, std::move(schema_entry));
+	return foo;
+
+	// if (!verify_existence) {
+	// 	if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+	// 		return nullptr;
+	// 	}
+	// 	throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
+	// }
+	// if (entry == entries.end()) {
+	// 	CreateSchemaInfo info;
+	// 	if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
+	// 		if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+	// 			return nullptr;
+	// 		} else {
+	// 			throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
+	// 		}
+	// 	}
+	// 	info.schema = name;
+	// 	info.internal = false;
+	// 	auto schema_entry = make_uniq<IRCSchemaEntry>(catalog, info);
+	// 	schema_entry->namespace_items = IRCAPI::ParseSchemaName(name);
+	// 	CreateEntryInternal(context, std::move(schema_entry));
+	// 	entry = entries.find(name);
+	// 	D_ASSERT(entry != entries.end());
+	// }
+	// return entry->second.get();
 }
 
 void IRCSchemaSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
