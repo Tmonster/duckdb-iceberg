@@ -178,6 +178,15 @@ optional_ptr<CatalogEntry> IRCSchemaEntry::LookupEntry(CatalogTransaction transa
 	return GetCatalogSet(type).GetEntry(transaction.GetContext(), lookup_info);
 }
 
+// optional_ptr<CatalogEntry> IRCSchemaEntry::LookupEntry(CatalogTransaction transaction,
+// 													   const EntryLookupInfo &lookup_info, bool force_check) {
+// 	auto type = lookup_info.GetCatalogType();
+// 	if (!CatalogTypeIsSupported(type)) {
+// 		return nullptr;
+// 	}
+// 	return GetCatalogSet(type).GetEntry(transaction.GetContext(), lookup_info);
+// }
+
 ICTableSet &IRCSchemaEntry::GetCatalogSet(CatalogType type) {
 	switch (type) {
 	case CatalogType::TABLE_ENTRY:

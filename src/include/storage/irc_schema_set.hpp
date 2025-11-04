@@ -12,7 +12,8 @@ public:
 
 public:
 	void LoadEntries(ClientContext &context);
-	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name, OnEntryNotFound if_not_found);
+	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name, OnEntryNotFound if_not_found,
+	                                    bool force_request = false);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 
 protected:

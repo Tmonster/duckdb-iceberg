@@ -44,10 +44,10 @@ statement ok
 CALL truncate_duckdb_logs();
 
 statement ok
-select * from my_datalake.default.table_unpartitioned;
+select * from my_datalake.default.quickstart_table;
 
 # only 1 call
 query I
-select count(*) from duckdb_logs_parsed('HTTP') where request.url like '%namespaces/%'
+select count(*) from duckdb_logs_parsed('HTTP') where request.type in ('GET', 'HEAD') and request.url like '%namespaces/%'
 ----
 1

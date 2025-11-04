@@ -52,11 +52,17 @@ void IRCatalog::ScanSchemas(ClientContext &context, std::function<void(SchemaCat
 optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction transaction,
                                                          const EntryLookupInfo &schema_lookup,
                                                          OnEntryNotFound if_not_found) {
+	return LookupSchema(transaction, schema_lookup, if_not_found, false);
+}
+
+optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction transaction,
+                                                         const EntryLookupInfo &schema_lookup,
+                                                         OnEntryNotFound if_not_found, bool force_request) {
 	auto &irc_transaction = IRCTransaction::Get(transaction.GetContext(), *this);
 	auto &schemas = irc_transaction.GetSchemas();
 
 	auto &schema_name = schema_lookup.GetEntryName();
-	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
+	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found, force_request);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
 	}
@@ -118,7 +124,7 @@ void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 		auto schema_lookup = EntryLookupInfo(CatalogType::SCHEMA_ENTRY, info.name);
 		auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
-		auto schema_exists = LookupSchema(transaction, schema_lookup, info.if_not_found);
+		auto schema_exists = LookupSchema(transaction, schema_lookup, info.if_not_found, true);
 		if (!schema_exists) {
 			return;
 		}
