@@ -194,35 +194,19 @@ optional_ptr<CatalogEntry> ICTableSet::GetEntry(ClientContext &context, const En
 	auto table_name = lookup.GetEntryName();
 	auto entry = entries.find(table_name);
 	if (entry == entries.end()) {
-		// create a table entry with fake schema data to avoid calling the LoadTableInformation endpoint for every
-		// table while listing schemas
-		// CreateTableInfo info(schema, table_name);
-		// vector<ColumnDefinition> columns;
-		// auto col = ColumnDefinition(string("__"), LogicalType::UNKNOWN);
-		// columns.push_back(std::move(col));
-		// info.columns = ColumnList(std::move(columns));
-		// auto table_entry = make_uniq<ICTableEntry>(info, catalog, schema, info);
-		// if (!table_entry->internal) {
-		// 	table_entry->internal = schema.internal;
-		// }
-		// auto result = table_entry.get();
-		// if (result->name.empty()) {
-		// 	throw InternalException("ICTableSet::CreateEntry called with empty name");
-		// }
-		// result->table_info.dummy_entry = std::move(table_entry);
-		// auto &optional = result->table_info.dummy_entry.get()->Cast<CatalogEntry>();
+
 		auto it = entries.emplace(table_name, IcebergTableInformation(ic_catalog, schema, table_name));
 		entry = it.first;
-		// if (!IRCAPI::VerifyTableExistence(context, ic_catalog, schema, table_name)) {
-		// 	return nullptr;
-		// }
-		// auto it = entries.emplace(table_name, IcebergTableInformation(ic_catalog, schema, table_name));
-		// entry = it.first;
 	}
 	if (entry->second.transaction_data && entry->second.transaction_data->is_deleted) {
 		return nullptr;
 	}
-	FillEntry(context, entry->second);
+	try {
+		FillEntry(context, entry->second);
+	} catch (HTTPException &e) {
+		entries.erase(entry);
+		return nullptr;
+	}
 	return entry->second.GetSchemaVersion(lookup.GetAtClause());
 }
 

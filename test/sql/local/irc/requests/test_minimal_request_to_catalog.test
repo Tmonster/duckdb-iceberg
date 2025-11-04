@@ -16,9 +16,6 @@ require httpfs
 set ignore_error_messages
 
 statement ok
-CALL enable_logging('HTTP');
-
-statement ok
 set logging_level='debug'
 
 statement ok
@@ -42,6 +39,9 @@ ATTACH '' AS my_datalake (
 
 statement ok
 CALL truncate_duckdb_logs();
+
+statement ok
+CALL enable_logging('HTTP');
 
 statement ok
 select * from my_datalake.default.quickstart_table;
