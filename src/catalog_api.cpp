@@ -1,5 +1,5 @@
 #include "catalog_api.hpp"
-#include "include/catalog_api.hpp"
+#include "catalog_api.hpp"
 
 #include "catalog_utils.hpp"
 #include "iceberg_logging.hpp"
@@ -14,8 +14,8 @@
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
-#include "include/storage/irc_authorization.hpp"
-#include "include/storage/irc_catalog.hpp"
+#include "storage/irc_authorization.hpp"
+#include "storage/irc_catalog.hpp"
 
 #include "rest_catalog/objects/list.hpp"
 

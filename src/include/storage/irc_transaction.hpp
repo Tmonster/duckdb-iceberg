@@ -43,6 +43,7 @@ public:
 	IRCatalog &GetCatalog();
 	void DropSecrets(ClientContext &context);
 	TableTransactionInfo GetTransactionRequest(ClientContext &context);
+	static IRCTransaction &GetICTransaction(CatalogTransaction transaction);
 
 private:
 	void CleanupFiles();

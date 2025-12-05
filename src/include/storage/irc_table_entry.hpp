@@ -45,6 +45,8 @@ public:
 	TableStorageInfo GetStorageInfo(ClientContext &context) override;
 	void BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj, LogicalUpdate &update,
 	                           ClientContext &context) override;
+	static unique_ptr<ICTableEntry> CreateDummyTableEntry(IcebergTableInformation &table_info, Catalog &catalog,
+	                                                      SchemaCatalogEntry &schema);
 
 public:
 	IcebergTableInformation &table_info;

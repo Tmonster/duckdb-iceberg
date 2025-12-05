@@ -23,18 +23,24 @@ IRCSchemaEntry::IRCSchemaEntry(Catalog &catalog, CreateSchemaInfo &info)
 IRCSchemaEntry::~IRCSchemaEntry() {
 }
 
-IRCTransaction &GetICTransaction(CatalogTransaction transaction) {
-	if (!transaction.transaction) {
-		throw InternalException("No transaction!?");
-	}
-	return transaction.transaction->Cast<IRCTransaction>();
-}
-
-optional_ptr<CatalogEntry> IRCSchemaEntry::CreateTable(IRCTransaction &irc_transaction, ClientContext &context,
-                                                       BoundCreateTableInfo &info) {
+optional_ptr<CatalogEntry> IRCSchemaEntry::CreateTableExtended(IRCTransaction &irc_transaction, ClientContext &context,
+                                                               BoundCreateTableInfo &info) {
 	auto &base_info = info.Base();
 
 	auto &catalog = irc_transaction.GetCatalog();
+
+	// Never actually create the table. not even a dummy table
+	// Table creation should happen in GetGlobalSinkState for plan create table as.
+	// for create table as, table created in GetGlobalSinkState
+	// for explain create table as, since the table is not in a transaction until the physical operator starts, it is
+	// not created
+
+	// for create table, we need to run create table code and add it to the transaction.
+	// for explain create table, nothing happens
+
+	// For create table as, you check if it is a dummy and then hit the endpoints. Table needs to be removed from dirty
+	// tables in transaction. for create table, the transaction commit will commit the dummy table information for
+	// explain create table/ explain create table as what happens? Are we in a transaction or no?
 
 	// always posts to IRC catalog so we can get the metadata
 	if (!tables.CreateNewEntry(context, catalog, *this, base_info)) {
@@ -47,6 +53,7 @@ optional_ptr<CatalogEntry> IRCSchemaEntry::CreateTable(IRCTransaction &irc_trans
 	// An eagerly created table (if stage_create isn't supported by Catalog) is not marked as dirty, because it requires
 	// no action on commit/abort. We do not drop it on abort because that isn't transactionally safe (no guarantees a
 	// different transaction didn't interact with the created table in the meantime)
+
 	if (catalog.attach_options.supports_stage_create) {
 		// mark table as dirty so at the end of the transaction updates/creates are commited
 		irc_transaction.MarkTableAsDirty(ic_entry);
@@ -63,7 +70,7 @@ optional_ptr<CatalogEntry> IRCSchemaEntry::CreateTable(CatalogTransaction transa
 	auto &irc_transaction = transaction.transaction->Cast<IRCTransaction>();
 	auto &context = transaction.context;
 	// directly create the table with stage_create = true;
-	return CreateTable(irc_transaction, *context, info);
+	return CreateTableExtended(irc_transaction, *context, info);
 }
 
 void IRCSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {

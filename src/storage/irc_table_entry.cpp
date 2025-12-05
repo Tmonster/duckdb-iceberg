@@ -146,6 +146,17 @@ TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<F
 	return iceberg_scan_function;
 }
 
+unique_ptr<ICTableEntry> ICTableEntry::CreateDummyTableEntry(IcebergTableInformation &table_info, Catalog &catalog,
+                                                             SchemaCatalogEntry &schema) {
+	CreateTableInfo info(schema, table_info.name);
+	vector<ColumnDefinition> columns;
+	auto col = ColumnDefinition(string("__"), LogicalType::UNKNOWN);
+	columns.push_back(std::move(col));
+	info.columns = ColumnList(std::move(columns));
+	auto table_entry = make_uniq<ICTableEntry>(table_info, catalog, schema, info);
+	return table_entry;
+}
+
 TableFunction ICTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
 	throw InternalException("ICTableEntry::GetScanFunction called without entry lookup info");
 }

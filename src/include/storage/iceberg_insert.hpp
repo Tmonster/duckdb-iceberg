@@ -31,7 +31,8 @@ struct IcebergCopyInput {
 
 class IcebergInsertGlobalState : public GlobalSinkState {
 public:
-	explicit IcebergInsertGlobalState() = default;
+	explicit IcebergInsertGlobalState(ICTableEntry &table);
+	ICTableEntry &table;
 	mutex lock;
 	vector<IcebergManifestEntry> written_files;
 	atomic<idx_t> insert_count;

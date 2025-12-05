@@ -1,0 +1,77 @@
+# name: test/sql/local/irc/create/test_create_table_on_execute.test
+# description: test create table
+# group: [create]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    SUPPORT_STAGE_CREATE false
+);
+
+statement ok
+set threads=1;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists prepare_execute_test;
+
+statement ok
+call enable_logging(level='debug');
+
+statement ok
+create table prepare_execute_test as select range a from range(10);
+
+mode skip
+
+statement ok
+create table prepare_execute_test as select range a from range(10);
+
+# request to list tables, request to see prepare_execute_test table
+# another request to list other tables when getting another option.
+# TODO: FIXME
+query I
+select count(*) from duckdb_logs_parsed('HTTP');
+----
+3
+
+statement error
+select * from prepare_execute_test;
+-----
+<REGEX>.*Does not exist.*
+
+mode skip
+
+mode output_result
+
+# one request to check table existence
+statement ok
+select count(*) from duckdb_logs_parsed('HTTP');

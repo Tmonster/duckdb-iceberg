@@ -37,6 +37,13 @@ IRCatalog &IRCTransaction::GetCatalog() {
 	return catalog;
 }
 
+IRCTransaction &IRCTransaction::GetICTransaction(CatalogTransaction transaction) {
+	if (!transaction.transaction) {
+		throw InternalException("No transaction!?");
+	}
+	return transaction.transaction->Cast<IRCTransaction>();
+}
+
 void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
                        const rest_api_objects::CommitTableRequest &table) {
 	//! requirements
