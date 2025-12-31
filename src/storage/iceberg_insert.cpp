@@ -9,7 +9,6 @@
 #include "iceberg_multi_file_list.hpp"
 #include "iceberg_value.hpp"
 #include "utils/iceberg_type.hpp"
-#include "duckdb/common/sort/partition_state.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
@@ -19,8 +18,6 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
-#include "duckdb/planner/expression/bound_cast_expression.hpp"
-#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/common/types/uuid.hpp"
 
 namespace duckdb {
@@ -293,7 +290,8 @@ SinkResultType IcebergInsert::Sink(ExecutionContext &context, DataChunk &chunk, 
 //===--------------------------------------------------------------------===//
 // GetData
 //===--------------------------------------------------------------------===//
-SourceResultType IcebergInsert::GetData(ExecutionContext &context, DataChunk &chunk, OperatorSourceInput &input) const {
+SourceResultType IcebergInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<IcebergInsertGlobalState>();
 	auto value = Value::BIGINT(global_state.insert_count);
 	chunk.SetCardinality(1);
