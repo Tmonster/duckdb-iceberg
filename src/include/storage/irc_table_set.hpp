@@ -21,7 +21,9 @@ public:
 	                                            const string &table_name);
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const EntryLookupInfo &lookup);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
-	bool CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema, CreateTableInfo &info);
+	static bool CreateNewEntry(ClientContext &context, IRCatalog &catalog, IRCSchemaEntry &schema,
+	                           CreateTableInfo &info);
+	void ClearEntries();
 
 public:
 	void LoadEntries(ClientContext &context);

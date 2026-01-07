@@ -1366,7 +1366,7 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 	}
 	auto &irc_catalog = catalog.Cast<IRCatalog>();
 	auto &irc_transaction = IRCTransaction::Get(context, irc_catalog);
-	auto &schema_set = irc_transaction.schemas;
+	auto &schema_set = irc_catalog.GetSchemas();
 
 	IcebergOptions options;
 	for (auto &kv : input.named_parameters) {
@@ -1404,7 +1404,7 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 	}
 
 	schema_set.LoadEntries(context);
-	for (auto &it : schema_set.entries) {
+	for (auto &it : schema_set.GetEntries()) {
 		auto &schema_entry = it.second->Cast<IRCSchemaEntry>();
 
 		auto &tables = schema_entry.tables;

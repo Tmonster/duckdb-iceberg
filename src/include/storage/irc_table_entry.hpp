@@ -38,7 +38,7 @@ public:
 
 public:
 	unique_ptr<BaseStatistics> GetStatistics(ClientContext &context, column_t column_id) override;
-	string PrepareIcebergScanFromEntry(ClientContext &context) const;
+	void PrepareIcebergScanFromEntry(ClientContext &context) const;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) override;
 	TableFunction GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
 	                              const EntryLookupInfo &lookup) override;
@@ -48,6 +48,15 @@ public:
 
 public:
 	IcebergTableInformation &table_info;
+};
+
+struct ICTableEntryHashFunction {
+	uint64_t operator()(const optional_ptr<ICTableEntry> &entry) const {
+		D_ASSERT(entry);
+		// FIXME: we shuold use a table uuid in case renaming tables to the same name happens
+		auto qualified_name = entry->catalog.GetName() + "." + entry->name;
+		return std::hash<string>()(qualified_name);
+	}
 };
 
 } // namespace duckdb

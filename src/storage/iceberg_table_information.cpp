@@ -1,5 +1,6 @@
 #include "storage/iceberg_table_information.hpp"
 
+#include "catalog_api.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "storage/irc_transaction.hpp"
@@ -14,7 +15,7 @@
 namespace duckdb {
 
 const string &IcebergTableInformation::BaseFilePath() const {
-	return load_table_result.metadata.location;
+	return table_metadata.location;
 }
 
 static string DetectStorageType(const string &location) {
@@ -137,7 +138,6 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 
 IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientContext &context) {
 	IRCAPITableCredentials result;
-
 	auto transaction_id = MetaTransaction::Get(context).global_transaction_id;
 	auto &transaction = IRCTransaction::Get(context, catalog);
 
@@ -169,24 +169,26 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	}
 
 	// Detect storage type from metadata location
-	const auto &metadata_location = load_table_result.metadata.location;
-	string storage_type = DetectStorageType(metadata_location);
+	const auto &table_location = table_metadata.GetLocation();
+	string storage_type = DetectStorageType(table_location);
 
 	// Mapping from config key to a duckdb secret option
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
 	config_options.insert(user_defaults.begin(), user_defaults.end());
-
-	if (load_table_result.has_config) {
-		auto &config = load_table_result.config;
+	auto key = IRCAPI::GetEncodedSchemaName(schema.namespace_items) + "." + name;
+	auto &cached_value = catalog.GetLoadTableResult(key);
+	auto &load_table_result = cached_value.load_table_result;
+	if (load_table_result->has_config) {
+		auto &config = load_table_result->config;
 		ParseConfigOptions(config, config_options, storage_type);
 	}
 
-	if (load_table_result.has_storage_credentials) {
-		auto &storage_credentials = load_table_result.storage_credentials;
+	if (load_table_result->has_storage_credentials) {
+		auto &storage_credentials = load_table_result->storage_credentials;
 
 		//! If there is only one credential listed, we don't really care about the prefix,
-		//! we can use the metadata_location instead.
+		//! we can use the table_location instead.
 		const bool ignore_credential_prefix = storage_credentials.size() == 1;
 		for (idx_t index = 0; index < storage_credentials.size(); index++) {
 			auto &credential = storage_credentials[index];
@@ -194,7 +196,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 			create_secret_input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 			create_secret_input.persist_type = SecretPersistType::TEMPORARY;
 
-			create_secret_input.scope.push_back(ignore_credential_prefix ? metadata_location : credential.prefix);
+			create_secret_input.scope.push_back(ignore_credential_prefix ? table_location : credential.prefix);
 			create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix);
 
 			create_secret_input.type = storage_type;
@@ -258,6 +260,35 @@ optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_pt
 		schema_id = snapshot->schema_id;
 	}
 	return schema_versions[schema_id].get();
+}
+
+optional_ptr<CatalogEntry> IcebergTableInformation::GetLatestSchema() {
+	return GetSchemaVersion(nullptr);
+}
+
+string IcebergTableInformation::GetTableKey(const vector<string> &namespace_items, const string &table_name) {
+	if (namespace_items.empty()) {
+		return table_name;
+	}
+	return IRCAPI::GetEncodedSchemaName(namespace_items) + "." + table_name;
+}
+
+string IcebergTableInformation::GetTableKey() {
+	return GetTableKey(schema.namespace_items, name);
+}
+
+IcebergTableInformation IcebergTableInformation::Copy() {
+	auto ret = IcebergTableInformation(catalog, schema, name);
+	auto table_key = ret.GetTableKey();
+	auto &cached_load_table_result = catalog.GetLoadTableResult(table_key);
+	ret.table_metadata = IcebergTableMetadata::FromTableMetadata(cached_load_table_result.load_table_result->metadata);
+	return ret;
+}
+
+void IcebergTableInformation::InitSchemaVersions() {
+	for (auto &table_schema : table_metadata.schemas) {
+		CreateSchemaVersion(*table_schema.second);
+	}
 }
 
 IcebergTableInformation::IcebergTableInformation(IRCatalog &catalog, IRCSchemaEntry &schema, const string &name)
@@ -343,6 +374,15 @@ void IcebergTableInformation::RemoveProperties(IRCTransaction &transaction, vect
 void IcebergTableInformation::SetLocation(IRCTransaction &transaction) {
 	InitTransactionData(transaction);
 	transaction_data->TableSetLocation();
+}
+
+bool IcebergTableInformation::IsTransactionLocalTable(IRCTransaction &transaction) {
+	for (auto &tbl : transaction.updated_tables) {
+		if (tbl.first == GetTableKey()) {
+			return true;
+		}
+	}
+	return false;
 }
 
 } // namespace duckdb
