@@ -41,7 +41,6 @@ optional_ptr<CatalogEntry> IRCSchemaSet::GetEntry(ClientContext &context, const 
 		info.schema = name;
 		info.internal = false;
 		auto schema_entry = make_uniq<IRCSchemaEntry>(catalog, info);
-		schema_entry->namespace_items = IRCAPI::ParseSchemaName(name);
 		CreateEntryInternal(context, std::move(schema_entry));
 		entry = entries.find(name);
 		D_ASSERT(entry != entries.end());
@@ -55,6 +54,31 @@ void IRCSchemaSet::Scan(ClientContext &context, const std::function<void(Catalog
 	for (auto &entry : entries) {
 		callback(*entry.second);
 	}
+}
+
+void IRCSchemaSet::AddEntry(string name, unique_ptr<IRCSchemaEntry> entry) {
+	entries.insert(make_pair(name, std::move(entry)));
+}
+
+CatalogEntry &IRCSchemaSet::GetEntry(const string &name) {
+	auto entry_it = entries.find(name);
+	if (entry_it == entries.end()) {
+		throw CatalogException("Schema '%s' does not exist", name);
+	}
+	auto &entry = entry_it->second;
+	return *entry;
+}
+
+const case_insensitive_map_t<unique_ptr<CatalogEntry>> &IRCSchemaSet::GetEntries() {
+	return entries;
+}
+
+void IRCSchemaSet::ClearEntries() {
+	for (auto &entry : entries) {
+		auto &ic_schema_entry = entry.second.get()->Cast<IRCSchemaEntry>();
+		ic_schema_entry.ClearTableEntries();
+	}
+	listed = false;
 }
 
 static string GetSchemaName(const vector<string> &items) {

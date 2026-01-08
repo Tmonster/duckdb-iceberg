@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../rest_catalog/objects/async_planning_result.hpp"
 #include "metadata/iceberg_transform.hpp"
 #include "duckdb/common/types/vector.hpp"
 
@@ -14,7 +15,7 @@ namespace duckdb {
 
 struct IcebergPartitionSpecField {
 public:
-	static IcebergPartitionSpecField ParseFromJson(rest_api_objects::PartitionField &field);
+	static IcebergPartitionSpecField ParseFromJson(const rest_api_objects::PartitionField &field);
 
 public:
 	string name;
@@ -29,13 +30,15 @@ public:
 
 struct IcebergPartitionSpec {
 public:
-	static IcebergPartitionSpec ParseFromJson(rest_api_objects::PartitionSpec &spec);
+	static IcebergPartitionSpec ParseFromJson(const rest_api_objects::PartitionSpec &spec);
 
 public:
 	bool IsUnpartitioned() const;
 	bool IsPartitioned() const;
 	const IcebergPartitionSpecField &GetFieldBySourceId(idx_t field_id) const;
 	string FieldsToJSON() const;
+	static void FieldsToJson(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
+	                         const vector<rest_api_objects::PartitionField> &fields);
 
 public:
 	int32_t spec_id;
