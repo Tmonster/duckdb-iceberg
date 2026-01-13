@@ -1,4 +1,5 @@
 #include "storage/iceberg_delete.hpp"
+#include "storage/iceberg_delete.hpp"
 #include "storage/irc_catalog.hpp"
 #include "storage/irc_transaction.hpp"
 #include "storage/irc_table_entry.hpp"
@@ -8,7 +9,6 @@
 #include "metadata/iceberg_snapshot.hpp"
 #include "metadata/iceberg_manifest.hpp"
 #include "storage/iceberg_metadata_info.hpp"
-
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
@@ -274,8 +274,16 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &table_info = irc_table.table_info;
 	auto &transaction = IRCTransaction::Get(context, table.catalog);
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
-	table_info.AddDeleteSnapshot(transaction, std::move(iceberg_delete_files));
-	transaction.MarkTableAsDirty(irc_table);
+	if (!global_state.written_files.empty()) {
+		if (table_info.IsTransactionLocalTable(irc_transaction)) {
+			table_info.AddDeleteSnapshot(transaction, std::move(iceberg_delete_files));
+		} else {
+			irc_transaction.updated_tables.emplace(table_info.GetTableKey(), table_info.Copy());
+			auto &updated_table = irc_transaction.updated_tables.at(table_info.GetTableKey());
+			updated_table.InitSchemaVersions();
+			updated_table.AddDeleteSnapshot(transaction, std::move(iceberg_delete_files));
+		}
+	}
 	return SinkFinalizeType::READY;
 }
 
