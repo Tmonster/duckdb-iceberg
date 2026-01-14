@@ -7,9 +7,11 @@
 #include "storage/irc_transaction.hpp"
 #include "utils/iceberg_type.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
+#include "duckdb/function/function_binder.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/execution/physical_operator_states.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
@@ -35,19 +37,20 @@ IcebergInsert::IcebergInsert(PhysicalPlan &physical_plan, const vector<LogicalTy
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 1), table(&table), schema(nullptr) {
 }
 
-IcebergCopyInput::IcebergCopyInput(ClientContext &context, ICTableEntry &table)
-    : catalog(table.catalog.Cast<IRCatalog>()), columns(table.GetColumns()) {
-	data_path = table.table_info.table_metadata.GetDataPath();
+IcebergCopyOptions::IcebergCopyOptions(unique_ptr<CopyInfo> info_p, CopyFunction copy_function_p)
+    : info(std::move(info_p)), copy_function(std::move(copy_function_p)) {
 }
 
-IcebergCopyInput::IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schema, const ColumnList &columns,
-                                   const string &data_path_p)
-    : catalog(schema.catalog.Cast<IRCatalog>()), columns(columns) {
-	// When data_path_p is provided directly, it's already the table location
-	// We should check if it has write.data.path property, but since this is a schema-level
-	// constructor and we don't have access to table metadata, we use the default behavior
-	data_path = data_path_p + "/data";
+IcebergCopyInput::IcebergCopyInput(ClientContext &context, ICTableEntry &table)
+    : catalog(table.catalog.Cast<IRCatalog>()), table(table), columns(table.GetColumns()),
+      data_path(table.table_info.table_metadata.GetLocation()) {
+	partition_data = nullptr;
 }
+
+// IcebergCopyInput::IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schema, const ColumnList &columns,
+//                                    const string &data_path_p)
+//     : catalog(schema.catalog.Cast<IRCatalog>()), columns(columns) {
+// }
 
 unique_ptr<GlobalSinkState> IcebergInsert::GetGlobalSinkState(ClientContext &context) const {
 	return make_uniq<IcebergInsertGlobalState>();
@@ -329,45 +332,317 @@ static Value WrittenFieldIds(const IcebergTableSchema &schema) {
 	return Value::STRUCT(std::move(values));
 }
 
-unique_ptr<CopyInfo> GetBindInput(IcebergCopyInput &input) {
-	// Create Copy Info
-	auto info = make_uniq<CopyInfo>();
-	info->file_path = input.data_path;
-	info->format = "parquet";
-	info->is_from = false;
-	for (auto &option : input.options) {
-		info->options[option.first] = option.second;
-	}
-	return info;
-}
+// unique_ptr<CopyInfo> GetBindInput(IcebergCopyInput &input) {
+// 	// Create Copy Info
+// 	auto info = make_uniq<CopyInfo>();
+// 	info->file_path = input.data_path;
+// 	info->format = "parquet";
+// 	info->is_from = false;
+// 	for (auto &option : input.options) {
+// 		info->options[option.first] = option.second;
+// 	}
+// 	return info;
+// }
 
 vector<IcebergManifestEntry> IcebergInsert::GetInsertManifestEntries(IcebergInsertGlobalState &global_state) {
 	lock_guard<mutex> guard(global_state.lock);
 	return std::move(global_state.written_files);
 }
 
-PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                   IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan) {
+static unique_ptr<Expression> CreateColumnReference(IcebergCopyInput &copy_input, const LogicalType &type,
+                                                    idx_t column_index) {
+	// physical plan generation: generate a reference directly
+	return make_uniq<BoundReferenceExpression>(type, column_index);
+}
+
+static unique_ptr<Expression> GetColumnReference(IcebergCopyInput &copy_input,
+                                                 const IcebergPartitionSpecField &field_id) {
+	optional_idx index;
+	auto &column_field_id = IcebergInsert::GetTopLevelColumn(copy_input, field_id, index);
+	// maybe I can just return the partitioned field_id?
+	return CreateColumnReference(copy_input, column_field_id.Type(), index.GetIndex());
+}
+
+static unique_ptr<Expression> GetFunction(ClientContext &context, IcebergCopyInput &copy_input,
+                                          const string &function_name, const IcebergPartitionSpecField &field_id) {
+	vector<unique_ptr<Expression>> children;
+	children.push_back(GetColumnReference(copy_input, field_id));
+
+	ErrorData error;
+	FunctionBinder binder(context);
+	auto function = binder.BindScalarFunction(DEFAULT_SCHEMA, function_name, std::move(children), error, false);
+	if (!function) {
+		error.Throw();
+	}
+	return function;
+}
+
+static unique_ptr<Expression> GetPartitionExpression(ClientContext &context, IcebergCopyInput &copy_input,
+                                                     const IcebergPartitionSpecField &field) {
+	switch (field.transform.Type()) {
+	case IcebergTransformType::IDENTITY:
+		return GetColumnReference(copy_input, field);
+	case IcebergTransformType::YEAR:
+		return GetFunction(context, copy_input, "year", field);
+	case IcebergTransformType::MONTH:
+		return GetFunction(context, copy_input, "month", field);
+	case IcebergTransformType::DAY:
+		return GetFunction(context, copy_input, "day", field);
+	case IcebergTransformType::HOUR:
+		return GetFunction(context, copy_input, "hour", field);
+	default:
+		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpression");
+	}
+}
+
+static string GetPartitionExpressionName(IcebergCopyInput &copy_input, const IcebergPartitionSpecField &field,
+                                         case_insensitive_set_t &names) {
+	string prefix;
+	switch (field.transform.Type()) {
+	case IcebergTransformType::IDENTITY:
+		return field.name;
+	case IcebergTransformType::YEAR:
+		prefix = "year";
+		break;
+	case IcebergTransformType::MONTH:
+		prefix = "month";
+		break;
+	case IcebergTransformType::DAY:
+		prefix = "day";
+		break;
+	case IcebergTransformType::HOUR:
+		prefix = "hour";
+		break;
+	default:
+		throw NotImplementedException("Unsupported partition transform type in GetPartitionExpressionName");
+	}
+	if (names.find(prefix) == names.end()) {
+		// prefer only the transform (e.g. year)
+		return prefix;
+	}
+	return prefix + "_" + field.name;
+}
+
+static void GeneratePartitionExpressions(ClientContext &context, IcebergCopyInput &copy_input,
+                                         IcebergCopyOptions &copy_options) {
+	bool all_identity = true;
+	for (auto &field : copy_input.partition_data->fields) {
+		if (field.transform.Type() != IcebergTransformType::IDENTITY) {
+			all_identity = false;
+			break;
+		}
+	}
+	if (all_identity) {
+		// all transforms are identity transforms - we can partition on the columns directly
+		// just set up the correct references to the partition columns
+		for (auto &field : copy_input.partition_data->fields) {
+			optional_idx col_idx;
+			// TODO: partition field id or source id?
+			// TODO: What is happening with all this top level stuff?
+			// IcebergInsert::GetTopLevelColumn(copy_input, field.partition_field_id, col_idx);
+			copy_options.partition_columns.push_back(col_idx.GetIndex());
+		}
+		return;
+	}
+	idx_t virtual_column_count;
+	// switch (copy_input.virtual_columns) {
+	// case InsertVirtualColumns::WRITE_ROW_ID:
+	// case InsertVirtualColumns::WRITE_SNAPSHOT_ID:
+	// 	virtual_column_count = 1;
+	// 	break;
+	// case InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID:
+	// 	virtual_column_count = 2;
+	// 	break;
+	// default:
+	// 	virtual_column_count = 0;
+	// 	break;
+	// }
+	// if we have partition columns that are NOT identity, we need to compute them separately, and NOT write them
+	idx_t partition_column_start = copy_input.columns.PhysicalColumnCount() + virtual_column_count;
+	for (idx_t part_idx = 0; part_idx < copy_input.partition_data->fields.size(); part_idx++) {
+		copy_options.partition_columns.push_back(partition_column_start++);
+	}
+	copy_options.write_partition_columns = false;
+
+	idx_t col_idx = 0;
+	for (auto &col : copy_input.columns.Physical()) {
+		copy_options.projection_list.push_back(CreateColumnReference(copy_input, col.Type(), col_idx++));
+	}
+	// push any projected virtual columns
+	for (idx_t i = 0; i < virtual_column_count; i++) {
+		copy_options.projection_list.push_back(CreateColumnReference(copy_input, LogicalType::BIGINT, col_idx++));
+	}
+	// push the partition expressions
+	case_insensitive_set_t names;
+	for (auto &field : copy_input.partition_data->fields) {
+		auto expr = GetPartitionExpression(context, copy_input, field);
+		copy_options.names.push_back(GetPartitionExpressionName(copy_input, field, names));
+		names.insert(copy_options.names.back());
+		copy_options.expected_types.push_back(expr->return_type);
+		copy_options.projection_list.push_back(std::move(expr));
+	}
+}
+
+IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, IcebergCopyInput &copy_input) {
+	auto info = make_uniq<CopyInfo>();
+	auto &catalog = copy_input.catalog;
+	info->file_path = copy_input.data_path;
+	info->format = "parquet";
+	info->is_from = false;
+	D_ASSERT(!copy_input.field_data.empty());
+	info->options["field_ids"] = std::move(copy_input.field_data);
+
+	// string parquet_compression;
+	// if (catalog.TryGetConfigOption("parquet_compression", parquet_compression, schema_id, table_id)) {
+	// 	info->options["compression"].emplace_back(parquet_compression);
+	// }
+	// string parquet_version;
+	// if (catalog.TryGetConfigOption("parquet_version", parquet_version, schema_id, table_id)) {
+	// 	info->options["parquet_version"].emplace_back(parquet_version);
+	// }
+	// string parquet_compression_level;
+	// if (catalog.TryGetConfigOption("parquet_compression_level", parquet_compression_level, schema_id, table_id)) {
+	// 	info->options["compression_level"].emplace_back(parquet_compression_level);
+	// }
+	// string row_group_size;
+	// if (catalog.TryGetConfigOption("parquet_row_group_size", row_group_size, schema_id, table_id)) {
+	// 	info->options["row_group_size"].emplace_back(row_group_size);
+	// }
+	// string row_group_size_bytes;
+	// if (catalog.TryGetConfigOption("parquet_row_group_size_bytes", row_group_size_bytes, schema_id, table_id)) {
+	// 	info->options["row_group_size_bytes"].emplace_back(row_group_size_bytes + " bytes");
+	// }
+	// string per_thread_output_str;
+	// bool per_thread_output = false;
+	// if (catalog.TryGetConfigOption("per_thread_output", per_thread_output_str, schema_id, table_id)) {
+	// 	per_thread_output = per_thread_output_str == "true";
+	// }
+	// idx_t target_file_size = catalog.GetConfigOption<idx_t>("target_file_size", schema_id, table_id,
+	//                                                         DuckLakeCatalog::DEFAULT_TARGET_FILE_SIZE);
+
+	// Always use native parquet geometry for writing
+	// info->options["geoparquet_version"].emplace_back("NONE");
+
 	// Get Parquet Copy function
 	auto copy_fun = TryGetCopyFunction(*context.db, "parquet");
 	if (!copy_fun) {
 		throw MissingExtensionException("Did not find parquet copy function required to write to iceberg table");
 	}
 
+	// auto &fs = FileSystem::GetFileSystem(context);
+	// if (!fs.IsRemoteFile(copy_input.data_path)) {
+	// 	// create data path if it does not yet exist
+	// 	try {
+	// 		fs.CreateDirectoriesRecursive(copy_input.data_path);
+	// 	} catch (...) {
+	// 	}
+	// }
+
+	// Bind Copy Function
+	CopyFunctionBindInput bind_input(*info);
+
 	auto names_to_write = copy_input.columns.GetColumnNames();
 	auto types_to_write = copy_input.columns.GetColumnTypes();
 
-	auto wat = GetBindInput(copy_input);
-	auto bind_input = CopyFunctionBindInput(*wat);
+	vector<LogicalType> casted_types;
+	// for (const auto &type : types_to_write) {
+	// 	if (DuckLakeTypes::RequiresCast(type)) {
+	// 		casted_types.push_back(DuckLakeTypes::GetCastedType(type));
+	// 	} else {
+	// 		casted_types.push_back(type);
+	// 	}
+	// }
 
-	auto function_data = copy_fun->function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
+	auto function_data = copy_fun->function.copy_to_bind(context, bind_input, names_to_write, casted_types);
 
-	auto &physical_copy = planner.Make<PhysicalCopyToFile>(
-	    GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS), copy_fun->function,
-	    std::move(function_data), 1);
-	auto &physical_copy_ref = physical_copy.Cast<PhysicalCopyToFile>();
+	IcebergCopyOptions result(std::move(info), copy_fun->function);
+	result.bind_data = std::move(function_data);
 
-	vector<idx_t> partition_columns;
+	result.use_tmp_file = false;
+	result.filename_pattern.SetFilenamePattern("{uuidv7}");
+	if (copy_input.partition_data) {
+		result.partition_output = true;
+		result.write_empty_file = true;
+		result.rotate = false;
+	} else {
+		result.partition_output = false;
+		result.write_empty_file = false;
+		// file_size_bytes is currently only supported for unpartitioned writes
+		// result.file_size_bytes = target_file_size;
+		result.rotate = true;
+	}
+	result.file_path = copy_input.data_path;
+	// StripTrailingSeparator(fs, result.file_path);
+	result.file_extension = "parquet";
+	result.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
+	// result.per_thread_output = per_thread_output;
+	result.write_partition_columns = true;
+	result.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
+	result.names = names_to_write;
+	result.expected_types = types_to_write;
+
+	if (copy_input.partition_data) {
+		// we are partitioning - generate partition expressions (if any)
+		GeneratePartitionExpressions(context, copy_input, result);
+	}
+	return result;
+}
+
+PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                   IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan) {
+	auto copy_options = GetCopyOptions(context, copy_input);
+
+	auto copy_return_types = GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS);
+	auto &physical_copy = planner
+	                          .Make<PhysicalCopyToFile>(copy_return_types, std::move(copy_options.copy_function),
+	                                                    std::move(copy_options.bind_data), 1)
+	                          .Cast<PhysicalCopyToFile>();
+
+	physical_copy.file_path = std::move(copy_options.file_path);
+	physical_copy.use_tmp_file = copy_options.use_tmp_file;
+	physical_copy.filename_pattern = std::move(copy_options.filename_pattern);
+	physical_copy.file_extension = std::move(copy_options.file_extension);
+	physical_copy.overwrite_mode = copy_options.overwrite_mode;
+	physical_copy.per_thread_output = copy_options.per_thread_output;
+	physical_copy.file_size_bytes = copy_options.file_size_bytes;
+	physical_copy.rotate = copy_options.rotate;
+	physical_copy.return_type = copy_options.return_type;
+
+	physical_copy.partition_output = copy_options.partition_output;
+	physical_copy.write_partition_columns = copy_options.write_partition_columns;
+	physical_copy.write_empty_file = copy_options.write_empty_file;
+	physical_copy.partition_columns = std::move(copy_options.partition_columns);
+	physical_copy.names = std::move(copy_options.names);
+	physical_copy.expected_types = std::move(copy_options.expected_types);
+	physical_copy.parallel = true;
+	// physical_copy.hive_file_pattern =
+	// 	copy_input.catalog.UseHiveFilePattern(!is_encrypted, copy_input.schema_id, copy_input.table_id);
+	if (plan) {
+		physical_copy.children.push_back(*plan);
+	}
+
+	return physical_copy;
+
+	// Get Parquet Copy function
+	// auto copy_fun = TryGetCopyFunction(*context.db, "parquet");
+	// if (!copy_fun) {
+	// 	throw MissingExtensionException("Did not find parquet copy function required to write to iceberg table");
+	// }
+	//
+	// auto names_to_write = copy_input.columns.GetColumnNames();
+	// auto types_to_write = copy_input.columns.GetColumnTypes();
+	//
+	// auto wat = GetBindInput(copy_input);
+	// auto bind_input = CopyFunctionBindInput(*wat);
+	//
+	// auto function_data = copy_fun->function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
+	//
+	// auto &physical_copy = planner.Make<PhysicalCopyToFile>(
+	//     GetCopyFunctionReturnLogicalTypes(CopyFunctionReturnType::WRITTEN_FILE_STATISTICS), copy_fun->function,
+	//     std::move(function_data), 1);
+	// auto &physical_copy_ref = physical_copy.Cast<PhysicalCopyToFile>();
+	//
+	// vector<idx_t> partition_columns;
 	//! TODO: support partitions
 	// auto partitions = op.table.Cast<ICTableEntry>().snapshot->GetPartitionColumns();
 	// if (partitions.size() != 0) {
@@ -382,35 +657,35 @@ PhysicalOperator &IcebergInsert::PlanCopyForInsert(ClientContext &context, Physi
 	//	}
 	//}
 
-	physical_copy_ref.use_tmp_file = false;
-	if (!partition_columns.empty()) {
-		physical_copy_ref.filename_pattern.SetFilenamePattern("{uuidv7}");
-		physical_copy_ref.file_path = copy_input.data_path;
-		physical_copy_ref.partition_output = true;
-		physical_copy_ref.partition_columns = partition_columns;
-		physical_copy_ref.write_empty_file = true;
-		physical_copy_ref.rotate = false;
-	} else {
-		physical_copy_ref.filename_pattern.SetFilenamePattern("{uuidv7}");
-		physical_copy_ref.file_path = copy_input.data_path;
-		physical_copy_ref.partition_output = false;
-		physical_copy_ref.write_empty_file = false;
-		physical_copy_ref.file_size_bytes = IRCatalog::DEFAULT_TARGET_FILE_SIZE;
-		physical_copy_ref.rotate = true;
-	}
-
-	physical_copy_ref.file_extension = "parquet";
-	physical_copy_ref.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
-	physical_copy_ref.per_thread_output = false;
-	physical_copy_ref.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS; // TODO: capture stats
-	physical_copy_ref.write_partition_columns = true;
-	if (plan) {
-		physical_copy.children.push_back(*plan);
-	}
-	physical_copy_ref.names = names_to_write;
-	physical_copy_ref.expected_types = types_to_write;
-	physical_copy_ref.hive_file_pattern = true;
-	return physical_copy;
+	// physical_copy_ref.use_tmp_file = false;
+	// if (!partition_columns.empty()) {
+	// 	physical_copy_ref.filename_pattern.SetFilenamePattern("{uuidv7}");
+	// 	physical_copy_ref.file_path = copy_input.data_path;
+	// 	physical_copy_ref.partition_output = true;
+	// 	physical_copy_ref.partition_columns = partition_columns;
+	// 	physical_copy_ref.write_empty_file = true;
+	// 	physical_copy_ref.rotate = false;
+	// } else {
+	// 	physical_copy_ref.filename_pattern.SetFilenamePattern("{uuidv7}");
+	// 	physical_copy_ref.file_path = copy_input.data_path;
+	// 	physical_copy_ref.partition_output = false;
+	// 	physical_copy_ref.write_empty_file = false;
+	// 	physical_copy_ref.file_size_bytes = IRCatalog::DEFAULT_TARGET_FILE_SIZE;
+	// 	physical_copy_ref.rotate = true;
+	// }
+	//
+	// physical_copy_ref.file_extension = "parquet";
+	// physical_copy_ref.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
+	// physical_copy_ref.per_thread_output = false;
+	// physical_copy_ref.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS; // TODO: capture stats
+	// physical_copy_ref.write_partition_columns = true;
+	// if (plan) {
+	// 	physical_copy.children.push_back(*plan);
+	// }
+	// physical_copy_ref.names = names_to_write;
+	// physical_copy_ref.expected_types = types_to_write;
+	// physical_copy_ref.hive_file_pattern = true;
+	// return physical_copy;
 }
 
 void VerifyDirectInsertionOrder(LogicalInsert &op) {
@@ -457,9 +732,6 @@ PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 	auto &schema = table_info.table_metadata.GetLatestSchema();
 
 	auto &partition_spec = table_info.table_metadata.GetLatestPartitionSpec();
-	if (!partition_spec.IsUnpartitioned()) {
-		throw NotImplementedException("INSERT into a partitioned table is not supported yet");
-	}
 	if (table_info.table_metadata.HasSortOrder()) {
 		auto &sort_spec = table_info.table_metadata.GetLatestSortOrder();
 		if (sort_spec.IsSorted()) {
@@ -467,12 +739,12 @@ PhysicalOperator &IRCatalog::PlanInsert(ClientContext &context, PhysicalPlanGene
 		}
 	}
 
-	// Create Copy Info
-	auto info = make_uniq<IcebergCopyInput>(context, table_entry);
-
+	// I should be able to set this up in PlanCopyForInsert if I have the ICTable in the info.
 	vector<Value> field_input;
 	field_input.push_back(WrittenFieldIds(schema));
-	info->options["field_ids"] = std::move(field_input);
+
+	auto info = make_uniq<IcebergCopyInput>(context, table_entry);
+	info->field_data = std::move(field_input);
 
 	auto &insert = planner.Make<IcebergInsert>(op, op.table, op.column_index_map);
 
@@ -504,12 +776,12 @@ PhysicalOperator &IRCatalog::PlanCreateTableAs(ClientContext &context, PhysicalP
 
 	auto &table_schema = ic_table.table_info.table_metadata.GetLatestSchema();
 
-	// Create Copy Info
-	auto info = make_uniq<IcebergCopyInput>(context, ic_table);
-
+	// I should be able to set this up in PlanCopyForInsert if I have the ICTable in the info.
 	vector<Value> field_input;
 	field_input.push_back(WrittenFieldIds(table_schema));
-	info->options["field_ids"] = std::move(field_input);
+	// Create Copy Info
+	auto info = make_uniq<IcebergCopyInput>(context, ic_table);
+	info->field_data = std::move(field_input);
 
 	auto &physical_copy = IcebergInsert::PlanCopyForInsert(context, planner, *info, plan);
 	physical_index_vector_t<idx_t> column_index_map;

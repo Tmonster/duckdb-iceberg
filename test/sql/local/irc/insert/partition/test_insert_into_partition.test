@@ -1,0 +1,52 @@
+# name: test/sql/local/irc/insert/partition/test_insert_into_partition.test
+# group: [partition]
+
+require-env ICEBERG_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+statement ok
+drop table if exists my_datalake.default.test_duckdb_partitioned;
+
+statement ok
+create table my_datalake.default.test_duckdb_partitioned (a int, b DATE);
+
+statement ok
+ALTER TABLE my_datalake.default.test_duckdb_partitioned SET PARTITIONED BY (a);
+
+statement ok
+insert into my_datalake.default.test_duckdb_partitioned select range %3, DATE '2020-01-01' from range(10);

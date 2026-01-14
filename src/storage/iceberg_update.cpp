@@ -270,23 +270,23 @@ PhysicalOperator &IRCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGene
 	if (table.table_info.table_metadata.iceberg_version != 2) {
 		throw NotImplementedException("Update Iceberg V%d tables", table.table_info.table_metadata.iceberg_version);
 	}
-
-	IcebergCopyInput copy_input(context, table);
-	vector<Value> field_input;
-	field_input.push_back(WrittenFieldIds(table_schema));
-	copy_input.options["field_ids"] = std::move(field_input);
-
-	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
-	// plan the delete
-	vector<idx_t> row_id_indexes;
-	for (idx_t i = 0; i < 2; i++) {
-		row_id_indexes.push_back(i);
-	}
-	auto &delete_op = IcebergDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes));
-	// plan the actual insert
-	auto &insert_op = IcebergInsert::PlanInsert(context, planner, table);
-
-	return planner.Make<IcebergUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op);
+	throw NotImplementedException("updates not supported. need to rewrite with partition rewrite");
+	// IcebergCopyInput copy_input(context, table);
+	// vector<Value> field_input;
+	// field_input.push_back(WrittenFieldIds(table_schema));
+	// copy_input.options["field_ids"] = std::move(field_input);
+	//
+	// auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, nullptr);
+	// // plan the delete
+	// vector<idx_t> row_id_indexes;
+	// for (idx_t i = 0; i < 2; i++) {
+	// 	row_id_indexes.push_back(i);
+	// }
+	// auto &delete_op = IcebergDelete::PlanDelete(context, planner, table, child_plan, std::move(row_id_indexes));
+	// // plan the actual insert
+	// auto &insert_op = IcebergInsert::PlanInsert(context, planner, table);
+	//
+	// return planner.Make<IcebergUpdate>(table, op.columns, child_plan, copy_op, delete_op, insert_op);
 }
 
 void ICTableEntry::BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj,

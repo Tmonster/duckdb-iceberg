@@ -60,7 +60,7 @@ public:
 
 	//! Get the data and metadata paths, falling back to default if not set
 	string GetLatestMetadataJson() const;
-	string GetLocation() const;
+	const string GetLocation() const;
 	string GetDataPath() const;
 	string GetMetadataPath() const;
 

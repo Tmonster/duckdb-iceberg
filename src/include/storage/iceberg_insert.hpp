@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "irc_transaction.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
 #include "duckdb/execution/physical_operator.hpp"
@@ -17,16 +18,49 @@
 
 namespace duckdb {
 
+struct IcebergCopyOptions {
+	IcebergCopyOptions(unique_ptr<CopyInfo> info, CopyFunction copy_function);
+
+	unique_ptr<CopyInfo> info;
+	CopyFunction copy_function;
+	unique_ptr<FunctionData> bind_data;
+
+	string file_path;
+	bool use_tmp_file;
+	FilenamePattern filename_pattern;
+	string file_extension;
+	CopyOverwriteMode overwrite_mode;
+	bool per_thread_output;
+	optional_idx file_size_bytes;
+	bool rotate;
+	CopyFunctionReturnType return_type;
+	bool hive_file_pattern;
+
+	bool partition_output;
+	bool write_partition_columns;
+	bool write_empty_file = true;
+	vector<idx_t> partition_columns;
+	vector<string> names;
+	vector<LogicalType> expected_types;
+
+	//! Set of projection columns to execute prior to inserting (if any)
+	vector<unique_ptr<Expression>> projection_list;
+};
+
 struct IcebergCopyInput {
 	explicit IcebergCopyInput(ClientContext &context, ICTableEntry &table);
-	IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schema, const ColumnList &columns,
-	                 const string &data_path_p);
+	// IcebergCopyInput(ClientContext &context, IRCSchemaEntry &schema, const ColumnList &columns,
+	//                  const string &data_path_p);
 
 	IRCatalog &catalog;
+	// Is table needed? maybe I can get away with just partition data.
+	ICTableEntry &table;
+	optional_ptr<IcebergPartitionSpec> partition_data;
+	vector<Value> field_data;
 	const ColumnList &columns;
-	string data_path;
-	//! Set of (key, value) options
-	case_insensitive_map_t<vector<Value>> options;
+	const string data_path;
+	// InsertVirtualColumns virtual_columns = InsertVirtualColumns::NONE;
+	// optional_idx get_table_index;
 };
 
 class IcebergInsertGlobalState : public GlobalSinkState {
@@ -74,6 +108,7 @@ public:
 	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
 	                          OperatorSinkFinalizeInput &input) const override;
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
+	static IcebergCopyOptions GetCopyOptions(ClientContext &context, IcebergCopyInput &copy_input);
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           IcebergCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 

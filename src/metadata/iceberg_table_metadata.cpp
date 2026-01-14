@@ -365,7 +365,7 @@ string IcebergTableMetadata::GetLatestMetadataJson() const {
 	return latest_metadata_json;
 }
 
-string IcebergTableMetadata::GetLocation() const {
+const string IcebergTableMetadata::GetLocation() const {
 	return location;
 }
 
