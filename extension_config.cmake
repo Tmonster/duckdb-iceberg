@@ -22,11 +22,11 @@ duckdb_extension_load(icu)
 #        GIT_TAG c16de934130a7aa6c2d88a97acba935450276633
 #)
 
-if (NOT MINGW)
-    duckdb_extension_load(aws
-            LOAD_TESTS
-            GIT_URL https://github.com/duckdb/duckdb-aws
-            GIT_TAG 18803d5e55b9f9f6dda5047d0fdb4f4238b6801d
-    )
-endif()
+#if (NOT MINGW)
+#    duckdb_extension_load(aws
+#            LOAD_TESTS
+#            GIT_URL https://github.com/duckdb/duckdb-aws
+#            GIT_TAG 18803d5e55b9f9f6dda5047d0fdb4f4238b6801d
+#    )
+#endif()
 endif()

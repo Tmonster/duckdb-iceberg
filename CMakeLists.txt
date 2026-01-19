@@ -86,7 +86,6 @@ build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${EXTENSION_SOURCES} ${ALL
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     find_package(CURL REQUIRED)
-    find_package(AWSSDK REQUIRED COMPONENTS core sso sts)
     include_directories(${CURL_INCLUDE_DIRS})
 endif()
 
@@ -98,15 +97,6 @@ find_package(roaring CONFIG REQUIRED)
 set(TARGET_NAME iceberg)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    # AWS SDK FROM vcpkg
-    target_include_directories(${EXTENSION_NAME}
-                            PUBLIC $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
-    target_link_libraries(${EXTENSION_NAME} PUBLIC ${AWSSDK_LINK_LIBRARIES})
-    target_include_directories(${TARGET_NAME}_loadable_extension
-                            PRIVATE $<BUILD_INTERFACE:${AWSSDK_INCLUDE_DIRS}>)
-    target_link_libraries(${TARGET_NAME}_loadable_extension
-                        ${AWSSDK_LINK_LIBRARIES})
-
     # Link dependencies into extension
     target_link_libraries(${EXTENSION_NAME} PUBLIC ${CURL_LIBRARIES})
     target_link_libraries(${TARGET_NAME}_loadable_extension ${CURL_LIBRARIES})

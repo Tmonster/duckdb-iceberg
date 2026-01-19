@@ -4,15 +4,7 @@
 		"avro-c",
 		"curl",
 		"openssl",
-		"roaring",
-		{
-			"name": "aws-sdk-cpp",
-			"features": [
-				"sso",
-				"sts",
-				"identity-management"
-			]
-		}
+		"roaring"
 	],
 	"vcpkg-configuration": {
 		"registries": [
