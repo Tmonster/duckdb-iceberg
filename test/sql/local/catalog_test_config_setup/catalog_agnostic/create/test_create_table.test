@@ -34,6 +34,18 @@ statement ok
 drop table if exists create_table_t2;
 
 statement ok
+drop table if exists create_table_t1;
+
+statement ok
+drop table if exists create_table_t2;
+
+statement ok
+drop table if exists create_table_t3;
+
+statement ok
+drop table if exists create_table_t4;
+
+statement ok
 begin;
 
 statement ok
