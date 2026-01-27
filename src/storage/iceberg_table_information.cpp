@@ -1,6 +1,6 @@
 #include "storage/iceberg_table_information.hpp"
 
-#include "catalog_api.hpp"
+#include "catalog_api.hpp" p"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/transaction_exception.hpp"
@@ -249,6 +249,48 @@ optional_ptr<CatalogEntry> IcebergTableInformation::CreateSchemaVersion(IcebergT
 	return result;
 }
 
+idx_t IcebergTableInformation::GetMaxSchemaId() {
+	idx_t max_schema_id = 0;
+	if (schema_versions.empty()) {
+		throw CatalogException("No schema versions found for table '%s.%s'", schema.name, name);
+	}
+	for (auto &schema : schema_versions) {
+		if (schema.first > max_schema_id) {
+			max_schema_id = schema.first;
+		}
+	}
+	return max_schema_id;
+}
+
+idx_t IcebergTableInformation::GetNextPartitionSpecId() {
+	idx_t max_partition_spec_id = table_metadata.default_spec_id;
+	for (auto &schema : table_metadata.GetPartitionSpecs()) {
+		if (schema.first > max_partition_spec_id) {
+			max_partition_spec_id = schema.first;
+		}
+	}
+	return max_partition_spec_id + 1;
+}
+
+int64_t IcebergTableInformation::GetExistingSpecId(IcebergPartitionSpec &spec) {
+	int64_t existing_spec_id = -1;
+	for (auto &existing_spec : table_metadata.GetPartitionSpecs()) {
+		for (idx_t field_index = 0; field_index < existing_spec.second.fields.size(); field_index++) {
+			auto existing_partition_col_source_id = existing_spec.second.fields[field_index].source_id;
+			auto new_spec_col_source_id = existing_spec.second.fields[field_index].source_id;
+			if (existing_partition_col_source_id != new_spec_col_source_id) {
+				continue;
+			}
+		}
+		if (existing_spec.second.fields.size() != spec.fields.size()) {
+			continue;
+		}
+		existing_spec_id = existing_spec.second.spec_id;
+		break;
+	}
+	return existing_spec_id;
+}
+
 optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
 	D_ASSERT(!schema_versions.empty());
 	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
@@ -400,6 +442,26 @@ void IcebergTableInformation::AddAssignUUID(IRCTransaction &transaction) {
 void IcebergTableInformation::AddAssertCreate(IRCTransaction &transaction) {
 	InitTransactionData(transaction);
 	transaction_data->TableAddAssertCreate();
+}
+
+void IcebergTableInformation::AddAssertCurrentSchemaId(IRCTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertCurrentSchemaId();
+}
+
+void IcebergTableInformation::AddAssertLastAssignedColumnFieldId(IRCTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertLastAssignedColumnFieldId();
+}
+
+void IcebergTableInformation::AddAssertLastAssignedPartitionId(IRCTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertLastAssignedPartitionId();
+}
+
+void IcebergTableInformation::AddAssertDefaultSpecId(IRCTransaction &transaction) {
+	InitTransactionData(transaction);
+	transaction_data->TableAddAssertDefaultSpecId();
 }
 
 void IcebergTableInformation::AddUpradeFormatVersion(IRCTransaction &transaction) {

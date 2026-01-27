@@ -26,6 +26,9 @@ public:
 	optional_ptr<CatalogEntry> GetLatestSchema();
 	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(IcebergTableSchema &table_schema);
+	idx_t GetMaxSchemaId();
+	idx_t GetNextPartitionSpecId();
+	int64_t GetExistingSpecId(IcebergPartitionSpec &spec);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
 	const string &BaseFilePath() const;
 
@@ -36,6 +39,10 @@ public:
 	                       vector<IcebergManifestEntry> &&data_files);
 	void AddSchema(IRCTransaction &transaction);
 	void AddAssertCreate(IRCTransaction &transaction);
+	void AddAssertCurrentSchemaId(IRCTransaction &transaction);
+	void AddAssertLastAssignedColumnFieldId(IRCTransaction &transaction);
+	void AddAssertLastAssignedPartitionId(IRCTransaction &transaction);
+	void AddAssertDefaultSpecId(IRCTransaction &transaction);
 	void AddAssignUUID(IRCTransaction &transaction);
 	void AddUpradeFormatVersion(IRCTransaction &transaction);
 	void AddSetCurrentSchema(IRCTransaction &transaction);
