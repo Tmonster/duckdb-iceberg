@@ -1,23 +1,23 @@
 #include "storage/irc_schema_entry.hpp"
-
-#include "storage/iceberg_table_information.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_transaction.hpp"
-#include "storage/irc_table_entry.hpp"
-#include "storage/irc_transaction.hpp"
-#include "utils/iceberg_type.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/column_list.hpp"
-#include "duckdb/parser/parsed_data/create_view_info.hpp"
-#include "duckdb/parser/parsed_data/create_index_info.hpp"
-#include "duckdb/parser/parsed_data/create_schema_info.hpp"
-#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
-#include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/constraints/list.hpp"
-#include "duckdb/common/unordered_set.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/parsed_data/alter_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_index_info.hpp"
+#include "duckdb/parser/parsed_data/create_schema_info.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
+#include "storage/iceberg_table_information.hpp"
 #include "storage/irc_catalog.hpp"
+#include "storage/irc_table_entry.hpp"
+#include "storage/irc_transaction.hpp"
+#include "storage/table_update/common.hpp"
+#include "utils/iceberg_type.hpp"
 namespace duckdb {
 
 IRCSchemaEntry::IRCSchemaEntry(Catalog &catalog, CreateSchemaInfo &info)
@@ -174,7 +174,106 @@ optional_ptr<CatalogEntry> IRCSchemaEntry::CreateCollation(CatalogTransaction tr
 }
 
 void IRCSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
-	throw NotImplementedException("Alter Schema Entry");
+	if (info.type != AlterType::ALTER_TABLE) {
+		throw NotImplementedException("Only ALTER TABLE is supported for Iceberg");
+	}
+	auto &alter_table_info = info.Cast<AlterTableInfo>();
+	auto &irc_transaction = GetICTransaction(transaction);
+	auto &context = transaction.GetContext();
+
+	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, alter_table_info.name);
+	auto catalog_entry = tables.GetEntry(context, lookup);
+	if (!catalog_entry) {
+		throw CatalogException("Table with name \"%s\" does not exist!", alter_table_info.name);
+	}
+	auto &table_entry = catalog_entry->Cast<ICTableEntry>();
+	auto &catalog_table_info = table_entry.table_info;
+	irc_transaction.updated_tables.emplace(catalog_table_info.GetTableKey(), catalog_table_info.Copy());
+	auto &updated_table = irc_transaction.updated_tables.at(catalog_table_info.GetTableKey());
+	updated_table.InitSchemaVersions();
+	updated_table.InitTransactionData(irc_transaction);
+
+	auto &current_schema = updated_table.table_metadata.GetLatestSchema();
+	// Copy the schema, then add it to the table metadata
+	auto new_schema = current_schema.Copy();
+	auto new_schema_id = updated_table.GetMaxSchemaId() + 1;
+	new_schema->schema_id = new_schema_id;
+
+	switch (alter_table_info.alter_table_type) {
+	case AlterTableType::SET_PARTITIONED_BY: {
+		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
+
+		// Ensure schema is the same as current
+		updated_table.AddAssertCurrentSchemaId(irc_transaction);
+		// Ensure last assigned partition field id is up to date
+		updated_table.AddAssertLastAssignedPartitionId(irc_transaction);
+
+		// TODO: generate correct new spec id
+		auto new_spec_id = updated_table.GetNextPartitionSpecId();
+		D_ASSERT(new_spec_id != 0);
+		idx_t base_partition_field_id = updated_table.table_metadata.GetLastPartitionFieldId() + 1;
+		IcebergPartitionSpec new_spec;
+		new_spec.spec_id = new_spec_id;
+
+		for (auto &key : partition_info.partition_keys) {
+			string column_name;
+			string transform_name = "identity";
+
+			if (key->type == ExpressionType::COLUMN_REF) {
+				auto &colref = key->Cast<ColumnRefExpression>();
+				column_name = colref.column_names.back();
+			} else if (key->type == ExpressionType::FUNCTION) {
+				auto &funcexpr = key->Cast<FunctionExpression>();
+				transform_name = funcexpr.function_name;
+				if (funcexpr.children.empty() || funcexpr.children[0]->type != ExpressionType::COLUMN_REF) {
+					throw NotImplementedException("Transforms are only supported on column references, not %s",
+					                              EnumUtil::ToChars(funcexpr.children[0]->type));
+				}
+				auto &colref = funcexpr.children[0]->Cast<ColumnRefExpression>();
+				column_name = colref.column_names.back();
+			} else {
+				throw NotImplementedException("Unsupported partition key type: %s", key->ToString());
+			}
+
+			// Find source_id
+			int32_t source_id = -1;
+			for (auto &col : new_schema->columns) {
+				if (StringUtil::CIEquals(col->name, column_name)) {
+					source_id = col->id;
+					break;
+				}
+			}
+			if (source_id == -1) {
+				throw CatalogException("Column \"%s\" not found in schema", column_name);
+			}
+
+			IcebergPartitionSpecField field;
+			field.name = column_name;
+			field.transform = IcebergTransform(transform_name);
+			field.source_id = source_id;
+			field.partition_field_id = base_partition_field_id + new_spec.fields.size(); // Use 1000+ for field IDs
+			new_spec.fields.push_back(std::move(field));
+		}
+
+		// if spec exists, just set it to that spec id
+		int64_t existing_spec_id = updated_table.GetExistingSpecId(new_spec);
+		if (existing_spec_id >= 0) {
+			updated_table.table_metadata.default_spec_id = existing_spec_id;
+			updated_table.AddPartitionSpec(irc_transaction);
+			return;
+		}
+
+		updated_table.table_metadata.partition_specs[new_spec_id] = std::move(new_spec);
+		updated_table.AddPartitionSpec(irc_transaction);
+		updated_table.table_metadata.default_spec_id = new_spec_id;
+		updated_table.SetDefaultSpec(irc_transaction);
+		return;
+	}
+	default: {
+		throw NotImplementedException("Alter table type not supported: %s",
+		                              EnumUtil::ToString(alter_table_info.alter_table_type));
+	}
+	}
 }
 
 static bool CatalogTypeIsSupported(CatalogType type) {

@@ -33,6 +33,10 @@ public:
 	// add a schema update for a table
 	void TableAddSchema();
 	void TableAddAssertCreate();
+	void TableAddAssertCurrentSchemaId();
+	void TableAddAssertLastAssignedColumnFieldId();
+	void TableAddAssertLastAssignedPartitionId();
+	void TableAddAssertDefaultSpecId();
 	void TableAssignUUID();
 	void TableAddUpradeFormatVersion();
 	void TableAddSetCurrentSchema();
@@ -47,7 +51,7 @@ public:
 public:
 	ClientContext &context;
 	IcebergTableInformation &table_info;
-	//! schema updates etc.
+	//! schema updates etc
 	vector<unique_ptr<IcebergTableUpdate>> updates;
 	//! has the table been deleted in the current transaction
 	bool is_deleted;
