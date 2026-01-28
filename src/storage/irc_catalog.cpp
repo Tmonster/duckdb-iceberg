@@ -15,6 +15,7 @@
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "storage/irc_catalog.hpp"
 #include "regex"
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "storage/irc_authorization.hpp"
 #include "storage/authorization/oauth2.hpp"
 #include "storage/authorization/sigv4.hpp"
@@ -29,7 +30,6 @@ IRCatalog::IRCatalog(AttachedDatabase &db_p, AccessMode access_mode, unique_ptr<
     : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
       warehouse(attach_options.warehouse), uri(attach_options.endpoint), version("v1"), attach_options(attach_options),
       default_schema(default_schema), schemas(*this), metadata_cache() {
-	D_ASSERT(!default_schema.empty());
 }
 
 IRCatalog::~IRCatalog() = default;
@@ -49,7 +49,10 @@ optional_ptr<SchemaCatalogEntry> IRCatalog::LookupSchema(CatalogTransaction tran
                                                          const EntryLookupInfo &schema_lookup,
                                                          OnEntryNotFound if_not_found) {
 	if (schema_lookup.GetEntryName() == DEFAULT_SCHEMA && default_schema != DEFAULT_SCHEMA) {
-		D_ASSERT(!default_schema.empty());
+		// throws error if default schema is empty
+		if (default_schema.empty() && if_not_found == OnEntryNotFound::RETURN_NULL) {
+			return nullptr;
+		}
 		return GetSchema(transaction, default_schema, if_not_found);
 	}
 
@@ -69,8 +72,15 @@ void IRCatalog::StoreLoadTableResult(const string &table_key,
 	if (metadata_cache.find(table_key) != metadata_cache.end()) {
 		metadata_cache.erase(table_key);
 	}
-	auto now = system_clock::now() + std::chrono::minutes(10);
-	auto val = make_uniq<MetadataCacheValue>(now, std::move(load_table_result));
+	// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
+	system_clock::time_point expires_at;
+	if (attach_options.max_table_staleness_micros.IsValid()) {
+		expires_at =
+		    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
+	} else {
+		expires_at = system_clock::time_point::min();
+	}
+	auto val = make_uniq<MetadataCacheValue>(expires_at, std::move(load_table_result));
 	metadata_cache.emplace(table_key, std::move(val));
 }
 
@@ -82,6 +92,20 @@ MetadataCacheValue &IRCatalog::GetLoadTableResult(const string &table_key) {
 	auto res = metadata_cache.find(table_key);
 	D_ASSERT(res != metadata_cache.end());
 	return *res->second;
+}
+
+optional_ptr<MetadataCacheValue> IRCatalog::TryGetValidCachedLoadTableResult(const string &table_key) {
+	std::lock_guard<std::mutex> g(metadata_cache_mutex);
+	auto it = metadata_cache.find(table_key);
+	if (it == metadata_cache.end()) {
+		return nullptr;
+	}
+	auto &cached_value = *it->second;
+	if (system_clock::now() > cached_value.expires_at) {
+		// cached value has expired
+		return nullptr;
+	}
+	return &cached_value;
 }
 
 void IRCatalog::RemoveLoadTableResult(string table_key) {
@@ -150,7 +174,7 @@ void IRCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 			return;
 		}
 	}
-	IRCAPI::CommitNamespaceDrop(context, *this, namespace_items);
+	IRCAPI::CommitNamespaceDrop(context, *this, namespace_items, OnEntryNotFound::RETURN_NULL);
 }
 
 unique_ptr<LogicalOperator> IRCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
@@ -522,6 +546,14 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 			set_by_attach_options.insert("purge_requested");
 		} else if (lower_name == "default_schema") {
 			default_schema = entry.second.ToString();
+		} else if (lower_name == "max_table_staleness") {
+			auto interval_option = entry.second.DefaultCastAs(LogicalType::INTERVAL);
+			auto interval_value = interval_option.GetValue<interval_t>();
+			int64_t interval_in_micros = 0;
+			if (!Interval::TryGetMicro(interval_value, interval_in_micros)) {
+				throw ConversionException("Could not get interval information from %s", interval_option.ToString());
+			}
+			attach_options.max_table_staleness_micros = interval_in_micros;
 		} else {
 			attach_options.options.emplace(std::move(entry));
 		}
@@ -603,9 +635,6 @@ unique_ptr<Catalog> IRCatalog::Attach(optional_ptr<StorageExtensionInfo> storage
 		throw InvalidConfigurationException("Missing 'endpoint' option for Iceberg attach");
 	}
 
-	if (default_schema.empty()) {
-		default_schema = DEFAULT_SCHEMA;
-	}
 	D_ASSERT(auth_handler);
 	auto catalog =
 	    make_uniq<IRCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);

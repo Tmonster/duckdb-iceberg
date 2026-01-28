@@ -31,16 +31,22 @@ optional_ptr<CatalogEntry> IRCSchemaSet::GetEntry(ClientContext &context, const 
 	}
 	if (entry == entries.end()) {
 		CreateSchemaInfo info;
-		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
-			if (if_not_found == OnEntryNotFound::RETURN_NULL) {
-				return nullptr;
-			} else {
-				throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
+		// Look up existence of default schema to avoid lookup of `duckdb_*` tables
+		if (name == DEFAULT_SCHEMA) {
+			if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
+				if (if_not_found == OnEntryNotFound::RETURN_NULL) {
+					return nullptr;
+				}
+				throw CatalogException("Schema '%s' does not exist", name);
 			}
 		}
 		info.schema = name;
 		info.internal = false;
 		auto schema_entry = make_uniq<IRCSchemaEntry>(catalog, info);
+		// we will not create entries with empty names
+		if (name.empty()) {
+			return nullptr;
+		}
 		CreateEntryInternal(context, std::move(schema_entry));
 		entry = entries.find(name);
 		D_ASSERT(entry != entries.end());
