@@ -9,6 +9,7 @@
 
 namespace duckdb {
 class IcebergTableSchema;
+class ParsedExpression;
 struct CreateTableInfo;
 class IcebergSchemaEntry;
 struct IcebergManifestEntry;
@@ -26,6 +27,11 @@ public:
 	optional_ptr<CatalogEntry> GetLatestSchema();
 	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);
 	optional_ptr<CatalogEntry> CreateSchemaVersion(IcebergTableSchema &table_schema);
+	idx_t GetMaxSchemaId();
+	idx_t GetNextPartitionSpecId();
+	int64_t GetExistingSpecId(IcebergPartitionSpec &spec);
+	void SetPartitionedBy(IcebergTransaction &transaction, const vector<unique_ptr<ParsedExpression>> &partition_keys,
+	                      const IcebergTableSchema &schema, bool first_partition_spec = false);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context);
 	const string &BaseFilePath() const;
 
@@ -36,6 +42,10 @@ public:
 	                       vector<IcebergManifestEntry> &&data_files);
 	void AddSchema(IcebergTransaction &transaction);
 	void AddAssertCreate(IcebergTransaction &transaction);
+	void AddAssertDefaultSpecId(IcebergTransaction &transaction);
+	void AddAssertCurrentSchemaId(IcebergTransaction &transaction);
+	void AddAssertLastAssignedColumnFieldId(IcebergTransaction &transaction);
+	void AddAssertLastAssignedPartitionId(IcebergTransaction &transaction);
 	void AddAssignUUID(IcebergTransaction &transaction);
 	void AddUpradeFormatVersion(IcebergTransaction &transaction);
 	void AddSetCurrentSchema(IcebergTransaction &transaction);
@@ -47,6 +57,7 @@ public:
 	void RemoveProperties(IcebergTransaction &transaction, vector<string> properties);
 	void SetLocation(IcebergTransaction &transaction);
 	bool IsTransactionLocalTable(IcebergTransaction &transaction);
+
 	static string GetTableKey(const vector<string> &namespace_items, const string &table_name);
 	string GetTableKey() const;
 	// we pass the transaction, because we are only allowed to copy table information state provded by the catalog

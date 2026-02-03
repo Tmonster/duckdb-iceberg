@@ -343,9 +343,10 @@ void IRCAPI::CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &cata
 
 		// Omit stack from error output
 		error._error.stack = vector<string>();
-		throw InvalidConfigurationException("Request to '%s' returned a non-200 status code (%s). \n message: %s\n type: %s\n reason: %s\n",
-			 url_builder.GetURLEncoded(), EnumUtil::ToString(response->status),
-			error._error.message, error._error.type, response->reason);
+		throw InvalidConfigurationException(
+		    "Request to '%s' returned a non-200 status code (%s). \n message: %s\n type: %s\n reason: %s\n",
+		    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), error._error.message, error._error.type,
+		    response->reason);
 	}
 }
 
@@ -376,7 +377,6 @@ void IRCAPI::CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, 
 	url_builder.AddPathComponent(catalog.prefix);
 	url_builder.AddPathComponent("namespaces");
 	url_builder.AddPathComponent(schema_name);
-
 	url_builder.AddPathComponent("tables");
 	url_builder.AddPathComponent(table_name);
 	url_builder.SetParam("purgeRequested", Value::BOOLEAN(catalog.attach_options.purge_requested).ToString());
@@ -439,7 +439,10 @@ rest_api_objects::LoadTableResult IRCAPI::CommitNewTable(ClientContext &context,
 	yyjson_mut_doc_set_root(doc, root_object);
 
 	auto initial_schema = table->table_info.table_metadata.schemas[table->table_info.table_metadata.current_schema_id];
-	auto create_transaction = make_uniq<IcebergCreateTableRequest>(initial_schema, table->table_info.name);
+	auto &initial_partition_spec =
+	    table->table_info.table_metadata.partition_specs[table->table_info.table_metadata.default_spec_id];
+	auto create_transaction =
+	    make_uniq<IcebergCreateTableRequest>(initial_schema, initial_partition_spec, table->table_info.name);
 	// if stage create is supported, create the table with stage_create = true and the table update will
 	// commit the table.
 	auto support_stage_create = catalog.attach_options.supports_stage_create;
