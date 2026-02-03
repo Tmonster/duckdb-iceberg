@@ -4,30 +4,32 @@
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "manifest_reader.hpp"
 
-#include "storage/irc_transaction.hpp"
-#include "storage/irc_catalog.hpp"
-#include "storage/irc_authorization.hpp"
+#include "storage/iceberg_transaction.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
+#include "storage/iceberg_authorization.hpp"
 #include "storage/iceberg_table_information.hpp"
 #include "storage/table_update/iceberg_add_snapshot.hpp"
 #include "storage/table_create/iceberg_create_table_request.hpp"
 #include "catalog_utils.hpp"
 #include "yyjson.hpp"
 #include "metadata/iceberg_snapshot.hpp"
-#include "storage/irc_catalog.hpp"
+#include "storage/catalog/iceberg_catalog.hpp"
 #include "duckdb/storage/table/update_state.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "storage/catalog/iceberg_schema_entry.hpp"
 
 namespace duckdb {
 
-IRCTransaction::IRCTransaction(IRCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
+IcebergTransaction::IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
     : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode) {
 }
 
-IRCTransaction::~IRCTransaction() = default;
+IcebergTransaction::~IcebergTransaction() = default;
 
-void IRCTransaction::Start() {
+void IcebergTransaction::Start() {
 }
 
-IRCatalog &IRCTransaction::GetCatalog() {
+IcebergCatalog &IcebergTransaction::GetCatalog() {
 	return catalog;
 }
 
@@ -50,6 +52,30 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			auto &assert_create = requirement.assert_create;
 			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
 			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_create.type.value.c_str());
+		} else if (requirement.has_assert_current_schema_id) {
+			auto &assert_current_schema_id = requirement.assert_current_schema_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_current_schema_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "current-schema-id",
+			                       assert_current_schema_id.current_schema_id);
+		} else if (requirement.has_assert_last_assigned_field_id) {
+			auto &assert_last_assigned_field_id = requirement.assert_last_assigned_field_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_last_assigned_field_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "last-assigned-field-id",
+			                       assert_last_assigned_field_id.last_assigned_field_id);
+		} else if (requirement.has_assert_last_assigned_partition_id) {
+			auto &assert_last_assigned_partition_id = requirement.assert_last_assigned_partition_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type",
+			                          assert_last_assigned_partition_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "last-assigned-partition-id",
+			                       assert_last_assigned_partition_id.last_assigned_partition_id);
+		} else if (requirement.has_assert_default_spec_id) {
+			auto &assert_default_spec_id = requirement.assert_default_spec_id;
+			auto requirement_json = yyjson_mut_arr_add_obj(doc, requirements_array);
+			yyjson_mut_obj_add_strcpy(doc, requirement_json, "type", assert_default_spec_id.type.value.c_str());
+			yyjson_mut_obj_add_int(doc, requirement_json, "default-spec-id", assert_default_spec_id.default_spec_id);
 		} else {
 			throw NotImplementedException("Can't serialize this TableRequirement type to JSON");
 		}
@@ -147,8 +173,8 @@ void CommitTableToJSON(yyjson_mut_doc *doc, yyjson_mut_val *root_object,
 			yyjson_mut_obj_add_strcpy(doc, update_json, "action", ref_update.action.c_str());
 			auto spec_json = yyjson_mut_obj_add_obj(doc, update_json, "spec");
 			yyjson_mut_obj_add_int(doc, spec_json, "spec-id", ref_update.spec.spec_id);
-			// Add fields array, later we can add the fields
-			auto fields_arr = yyjson_mut_obj_add_arr(doc, spec_json, "fields");
+			// add fields
+			IcebergPartitionSpec::FieldsToJson(doc, spec_json, ref_update.spec.fields);
 		} else if (update.has_set_default_sort_order_update) {
 			auto update_json = yyjson_mut_arr_add_obj(doc, updates_array);
 			auto &ref_update = update.set_default_sort_order_update;
@@ -244,7 +270,7 @@ static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
 	return req;
 }
 
-void IRCTransaction::DropSecrets(ClientContext &context) {
+void IcebergTransaction::DropSecrets(ClientContext &context) {
 	auto &secret_manager = SecretManager::Get(context);
 	for (auto &secret_name : created_secrets) {
 		(void)secret_manager.DropSecretByName(context, secret_name, OnEntryNotFound::RETURN_NULL);
@@ -266,7 +292,7 @@ static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot
 	return table_update;
 }
 
-TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &context) {
+TableTransactionInfo IcebergTransaction::GetTransactionRequest(ClientContext &context) {
 	TableTransactionInfo info;
 	auto &transaction = info.request;
 	for (auto &updated_table : updated_tables) {
@@ -276,7 +302,7 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 		}
 		IcebergCommitState commit_state;
 		auto &table_change = commit_state.table_change;
-		auto &schema = table_info.schema.Cast<IRCSchemaEntry>();
+		auto &schema = table_info.schema.Cast<IcebergSchemaEntry>();
 		table_change.identifier._namespace.value = schema.namespace_items;
 		table_change.identifier.name = table_info.name;
 		table_change.has_identifier = true;
@@ -298,7 +324,7 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 		for (auto &update : transaction_data.updates) {
 			if (update->type == IcebergTableUpdateType::ADD_SNAPSHOT) {
 				// we need to recreate the keys in the current context.
-				auto &ic_table_entry = table_info.GetLatestSchema()->Cast<ICTableEntry>();
+				auto &ic_table_entry = table_info.GetLatestSchema()->Cast<IcebergTableEntry>();
 				ic_table_entry.PrepareIcebergScanFromEntry(context);
 			}
 			update->CreateUpdate(db, context, commit_state);
@@ -315,13 +341,13 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 			commit_state.table_change.updates.push_back(std::move(set_snapshot_ref_update));
 		}
 
-		if (current_snapshot) {
+		if (current_snapshot && !transaction_data.alters.empty()) {
 			//! If any changes were made to the state of the table, we should assert that our parent snapshot has
 			//! not changed. We don't want to change the table location if someone has added a snapshot
 			commit_state.table_change.requirements.push_back(CreateAssertRefSnapshotIdRequirement(*current_snapshot));
-		} else if (!info.has_assert_create) {
-			//! If the table had no snapshots and isn't created by this transaction, we should assert that no snapshot
-			//! has been added in the meantime
+		} else if (!current_snapshot && !transaction_data.alters.empty() && !info.has_assert_create) {
+			//! If the table had no snapshots, is not created in this transaction, and has some kind of update
+			//! we should ensure no snapshots have been added in the meantime
 			commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
 		}
 
@@ -330,21 +356,21 @@ TableTransactionInfo IRCTransaction::GetTransactionRequest(ClientContext &contex
 	return info;
 }
 
-void IRCTransaction::Commit() {
+void IcebergTransaction::Commit() {
 	if (updated_tables.empty() && deleted_tables.empty()) {
 		return;
 	}
 
 	Connection temp_con(db);
 	temp_con.BeginTransaction();
-	auto &context = temp_con.context;
+	auto &temp_con_context = temp_con.context;
 	try {
-		DoTableUpdates(*context);
-		DoTableDeletes(*context);
+		DoTableUpdates(*temp_con_context);
+		DoTableDeletes(*temp_con_context);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		CleanupFiles();
-		DropSecrets(*context);
+		DropSecrets(*temp_con_context);
 		temp_con.Rollback();
 		error.Throw("Failed to commit Iceberg transaction: ");
 	}
@@ -352,7 +378,7 @@ void IRCTransaction::Commit() {
 	temp_con.Rollback();
 }
 
-void IRCTransaction::DoTableUpdates(ClientContext &context) {
+void IcebergTransaction::DoTableUpdates(ClientContext &context) {
 	if (!updated_tables.empty()) {
 		auto transaction_info = GetTransactionRequest(context);
 		auto &transaction = transaction_info.request;
@@ -386,8 +412,8 @@ void IRCTransaction::DoTableUpdates(ClientContext &context) {
 	}
 }
 
-void IRCTransaction::DoTableDeletes(ClientContext &context) {
-	auto &ic_catalog = catalog.Cast<IRCatalog>();
+void IcebergTransaction::DoTableDeletes(ClientContext &context) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	for (auto &deleted_table : deleted_tables) {
 		auto &table = deleted_table.second;
 		auto schema_key = table.schema.name;
@@ -396,10 +422,16 @@ void IRCTransaction::DoTableDeletes(ClientContext &context) {
 		IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table.name);
 		// remove the load table result
 		ic_catalog.RemoveLoadTableResult(table_key);
+		// remove the table entry from the catalog
+		auto &schema_entry = ic_catalog.schemas.GetEntry(schema_key).Cast<IcebergSchemaEntry>();
+		DropInfo drop_info;
+		drop_info.name = table_name;
+		drop_info.if_not_found = OnEntryNotFound::RETURN_NULL;
+		schema_entry.DropEntry(context, drop_info, true);
 	}
 }
 
-void IRCTransaction::CleanupFiles() {
+void IcebergTransaction::CleanupFiles() {
 	// remove any files that were written
 	if (!catalog.attach_options.allows_deletes) {
 		// certain catalogs don't allow deletes and will have a s3.deletes attribute in the config describing this
@@ -423,8 +455,9 @@ void IRCTransaction::CleanupFiles() {
 			}
 			auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 			auto manifest_list_entries = add_snapshot.manifest_list.GetManifestFilesConst();
-			for (const auto &manifest_entry : manifest_list_entries) {
-				for (auto &data_file : manifest_entry.manifest_file.data_files) {
+			for (const auto &manifest : manifest_list_entries) {
+				for (auto &manifest_entry : manifest.manifest_file.entries) {
+					auto &data_file = manifest_entry.data_file;
 					fs.TryRemoveFile(data_file.file_path);
 				}
 			}
@@ -432,12 +465,12 @@ void IRCTransaction::CleanupFiles() {
 	}
 }
 
-void IRCTransaction::Rollback() {
+void IcebergTransaction::Rollback() {
 	CleanupFiles();
 }
 
-IRCTransaction &IRCTransaction::Get(ClientContext &context, Catalog &catalog) {
-	return Transaction::Get(context, catalog).Cast<IRCTransaction>();
+IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
+	return Transaction::Get(context, catalog).Cast<IcebergTransaction>();
 }
 
 } // namespace duckdb
