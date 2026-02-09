@@ -134,6 +134,8 @@ private:
 	// defaults and overrides provided by a catalog.
 	case_insensitive_map_t<string> defaults;
 	case_insensitive_map_t<string> overrides;
+	CatalogEntryLookup TryLookupEntryInternal(CatalogTransaction transaction, const string &schema,
+											  const EntryLookupInfo &lookup_info) override;
 
 public:
 	unordered_set<string> supported_urls;

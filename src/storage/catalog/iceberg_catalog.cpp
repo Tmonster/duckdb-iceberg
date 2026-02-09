@@ -46,6 +46,77 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 	schemas.Scan(context, [&](CatalogEntry &schema) { callback(schema.Cast<IcebergSchemaEntry>()); });
 }
 
+CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction transaction, const string &schema,
+											  const EntryLookupInfo &lookup_info) {
+	auto &context = transaction.GetContext();
+	auto lookup_type = lookup_info.GetCatalogType();
+
+	// Helper: get or create a schema entry in the local schemas set
+	auto get_or_create_schema_entry = [&]() -> optional_ptr<SchemaCatalogEntry> {
+		auto entry = schemas.GetEntry(context, schema, OnEntryNotFound::RETURN_NULL);
+		if (!entry) {
+			CreateSchemaInfo info;
+			info.schema = schema;
+			info.internal = false;
+			auto new_schema = make_uniq<IcebergSchemaEntry>(*this, info);
+			schemas.AddEntry(schema, std::move(new_schema));
+			entry = schemas.GetEntry(context, schema, OnEntryNotFound::RETURN_NULL);
+		}
+		return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
+	};
+
+	if (lookup_type == CatalogType::SCHEMA_ENTRY) {
+		// Schema lookup: verify schema existence on the server
+		if (!IRCAPI::VerifySchemaExistence(context, *this, schema)) {
+			return {nullptr, nullptr, ErrorData()};
+		}
+		// Schema exists remotely, add it to the local entries
+		auto schema_entry = get_or_create_schema_entry();
+		return {schema_entry, nullptr, ErrorData()};
+	}
+
+	// Table lookup: first get or create a schema entry (needed for the API call)
+	auto schema_entry = get_or_create_schema_entry();
+	auto &iceberg_schema = schema_entry->Cast<IcebergSchemaEntry>();
+	auto &table_name = lookup_info.GetEntryName();
+
+	// Verify table existence via GetTable
+	auto get_table_result = IRCAPI::GetTable(context, *this, iceberg_schema, table_name);
+
+	if (!get_table_result.has_error) {
+		// Valid response: store result and create table entry from the response
+		auto table_key = IcebergTableInformation::GetTableKey(iceberg_schema.namespace_items, table_name);
+		StoreLoadTableResult(table_key, std::move(get_table_result.result_));
+		auto &cached_result = GetLoadTableResult(table_key);
+
+		// Create table information in the schema's table set
+		auto &table_entries = iceberg_schema.tables.GetEntriesMutable();
+		if (table_entries.find(table_name) != table_entries.end()) {
+			table_entries.erase(table_name);
+		}
+		auto it = table_entries.emplace(table_name, IcebergTableInformation(*this, iceberg_schema, table_name));
+		auto &table_info = it.first->second;
+		table_info.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_result.load_table_result);
+		auto &table_schemas = table_info.table_metadata.schemas;
+		D_ASSERT(!table_schemas.empty());
+		for (auto &table_schema : table_schemas) {
+			table_info.CreateSchemaVersion(*table_schema.second);
+		}
+
+		auto table_entry = table_info.GetSchemaVersion(lookup_info.GetAtClause());
+		return {schema_entry, table_entry, ErrorData()};
+	}
+
+	// Table not found: check if the schema at least exists
+	if (!IRCAPI::VerifySchemaExistence(context, *this, schema)) {
+		// Schema doesn't exist either, remove the local entry
+		schemas.RemoveEntry(schema);
+		return {nullptr, nullptr, ErrorData()};
+	}
+
+	return {schema_entry, nullptr, ErrorData()};
+}
+
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
