@@ -15,6 +15,7 @@
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "storage/catalog/iceberg_catalog.hpp"
 #include "regex"
+#include "storage/iceberg_transaction.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "storage/iceberg_authorization.hpp"
 #include "storage/authorization/oauth2.hpp"
@@ -47,7 +48,7 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 }
 
 CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction transaction, const string &schema,
-											  const EntryLookupInfo &lookup_info) {
+                                                          const EntryLookupInfo &lookup_info) {
 	auto &context = transaction.GetContext();
 	auto lookup_type = lookup_info.GetCatalogType();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
@@ -127,7 +128,7 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 		// Valid response: store result and create table entry from the response
 		StoreLoadTableResult(table_key, std::move(get_table_result.result_));
 
-			// Create table information in the schema's table set
+		// Create table information in the schema's table set
 		auto &table_entries = iceberg_schema.tables.GetEntriesMutable();
 		if (table_entries.find(table_name) != table_entries.end()) {
 			table_entries.erase(table_name);
@@ -140,6 +141,9 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 			D_ASSERT(cached_result);
 			const rest_api_objects::LoadTableResult &load_table_result = *cached_result->load_table_result.get();
 			table_info.table_metadata = IcebergTableMetadata::FromLoadTableResult(load_table_result);
+			auto blah = TableInfoCache(table_info.table_metadata.last_sequence_number,
+			                           table_info.table_metadata.current_snapshot_id);
+			iceberg_transaction.requested_tables.emplace(table_name, blah);
 		}
 		auto &table_schemas = table_info.table_metadata.schemas;
 		D_ASSERT(!table_schemas.empty());
@@ -215,7 +219,8 @@ std::mutex &IcebergCatalog::GetMetadataCacheLock() {
 }
 
 optional_ptr<MetadataCacheValue> IcebergCatalog::TryGetValidCachedLoadTableResult(const string &table_key,
-                                                                                  lock_guard<std::mutex> &lock, bool validate_cache) {
+                                                                                  lock_guard<std::mutex> &lock,
+                                                                                  bool validate_cache) {
 	(void)lock;
 	auto it = metadata_cache.find(table_key);
 	if (it == metadata_cache.end()) {

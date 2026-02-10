@@ -110,8 +110,8 @@ public:
 	//! Returns a reference to the metadata cache mutex. The caller is responsible for holding the lock
 	//! for the duration of any access to data returned by TryGetValidCachedLoadTableResult.
 	std::mutex &GetMetadataCacheLock();
-	optional_ptr<MetadataCacheValue> TryGetValidCachedLoadTableResult(const string &table_key,
-	                                                                  lock_guard<std::mutex> &lock, bool validate_cache = true);
+	optional_ptr<MetadataCacheValue>
+	TryGetValidCachedLoadTableResult(const string &table_key, lock_guard<std::mutex> &lock, bool validate_cache = true);
 	void RemoveLoadTableResult(const string &table_key);
 
 public:
@@ -135,7 +135,7 @@ private:
 	case_insensitive_map_t<string> defaults;
 	case_insensitive_map_t<string> overrides;
 	CatalogEntryLookup TryLookupEntryInternal(CatalogTransaction transaction, const string &schema,
-											  const EntryLookupInfo &lookup_info) override;
+	                                          const EntryLookupInfo &lookup_info) override;
 
 public:
 	unordered_set<string> supported_urls;
