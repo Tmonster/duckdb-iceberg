@@ -50,7 +50,7 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 											  const EntryLookupInfo &lookup_info) {
 	auto &context = transaction.GetContext();
 	auto lookup_type = lookup_info.GetCatalogType();
-
+	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
 	// Helper: get or create a schema entry in the local schemas set
 	auto get_or_create_schema_entry = [&]() -> optional_ptr<SchemaCatalogEntry> {
 		auto entry = schemas.GetEntry(context, schema, OnEntryNotFound::RETURN_NULL);
@@ -66,6 +66,15 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 	};
 
 	if (lookup_type == CatalogType::SCHEMA_ENTRY) {
+		// Check if schema was deleted in this transaction
+		if (iceberg_transaction.deleted_schemas.count(schema) > 0) {
+			return {nullptr, nullptr, ErrorData()};
+		}
+		// Check if schema was created in this transaction
+		if (iceberg_transaction.created_schemas.count(schema) > 0) {
+			auto schema_entry = get_or_create_schema_entry();
+			return {schema_entry, nullptr, ErrorData()};
+		}
 		// Schema lookup: verify schema existence on the server
 		if (!IRCAPI::VerifySchemaExistence(context, *this, schema)) {
 			return {nullptr, nullptr, ErrorData()};
@@ -79,24 +88,59 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 	auto schema_entry = get_or_create_schema_entry();
 	auto &iceberg_schema = schema_entry->Cast<IcebergSchemaEntry>();
 	auto &table_name = lookup_info.GetEntryName();
+	auto table_key = IcebergTableInformation::GetTableKey(iceberg_schema.namespace_items, table_name);
+
+	// Check if the table was deleted in this transaction
+	if (iceberg_transaction.deleted_tables.count(table_key) > 0) {
+		return {schema_entry, nullptr, ErrorData()};
+	}
+
+	// Check if the table was updated in this transaction
+	auto updated_entry = iceberg_transaction.updated_tables.find(table_key);
+	if (updated_entry != iceberg_transaction.updated_tables.end()) {
+		auto table_entry = updated_entry->second.GetSchemaVersion(lookup_info.GetAtClause());
+		return {schema_entry, table_entry, ErrorData()};
+	}
+
+	// Check if the table was already requested in this transaction
+	auto requested_entry = iceberg_transaction.requested_tables.find(table_name);
+	if (requested_entry != iceberg_transaction.requested_tables.end()) {
+		if (!requested_entry->second.exists) {
+			// Table was previously requested and did not exist
+			return {schema_entry, nullptr, ErrorData()};
+		}
+		// Table was previously requested and exists, find it in the schema's table set
+		auto &table_entries = iceberg_schema.tables.GetEntriesMutable();
+		auto entry = table_entries.find(table_name);
+		if (entry != table_entries.end()) {
+			auto table_entry = entry->second.GetSchemaVersion(lookup_info.GetAtClause());
+			return {schema_entry, table_entry, ErrorData()};
+		}
+		// Table no longer in entries (possibly dropped by another transaction)
+		return {schema_entry, nullptr, ErrorData()};
+	}
 
 	// Verify table existence via GetTable
 	auto get_table_result = IRCAPI::GetTable(context, *this, iceberg_schema, table_name);
 
 	if (!get_table_result.has_error) {
 		// Valid response: store result and create table entry from the response
-		auto table_key = IcebergTableInformation::GetTableKey(iceberg_schema.namespace_items, table_name);
 		StoreLoadTableResult(table_key, std::move(get_table_result.result_));
-		auto &cached_result = GetLoadTableResult(table_key);
 
-		// Create table information in the schema's table set
+			// Create table information in the schema's table set
 		auto &table_entries = iceberg_schema.tables.GetEntriesMutable();
 		if (table_entries.find(table_name) != table_entries.end()) {
 			table_entries.erase(table_name);
 		}
 		auto it = table_entries.emplace(table_name, IcebergTableInformation(*this, iceberg_schema, table_name));
 		auto &table_info = it.first->second;
-		table_info.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_result.load_table_result);
+		{
+			lock_guard<std::mutex> cache_lock(GetMetadataCacheLock());
+			auto cached_result = TryGetValidCachedLoadTableResult(table_key, cache_lock, false);
+			D_ASSERT(cached_result);
+			const rest_api_objects::LoadTableResult &load_table_result = *cached_result->load_table_result.get();
+			table_info.table_metadata = IcebergTableMetadata::FromLoadTableResult(load_table_result);
+		}
 		auto &table_schemas = table_info.table_metadata.schemas;
 		D_ASSERT(!table_schemas.empty());
 		for (auto &table_schema : table_schemas) {
@@ -171,14 +215,14 @@ std::mutex &IcebergCatalog::GetMetadataCacheLock() {
 }
 
 optional_ptr<MetadataCacheValue> IcebergCatalog::TryGetValidCachedLoadTableResult(const string &table_key,
-                                                                                  lock_guard<std::mutex> &lock) {
+                                                                                  lock_guard<std::mutex> &lock, bool validate_cache) {
 	(void)lock;
 	auto it = metadata_cache.find(table_key);
 	if (it == metadata_cache.end()) {
 		return nullptr;
 	}
 	auto &cached_value = *it->second;
-	if (system_clock::now() > cached_value.expires_at) {
+	if (validate_cache && system_clock::now() > cached_value.expires_at) {
 		// cached value has expired
 		return nullptr;
 	}

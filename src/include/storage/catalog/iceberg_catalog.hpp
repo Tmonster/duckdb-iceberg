@@ -111,7 +111,7 @@ public:
 	//! for the duration of any access to data returned by TryGetValidCachedLoadTableResult.
 	std::mutex &GetMetadataCacheLock();
 	optional_ptr<MetadataCacheValue> TryGetValidCachedLoadTableResult(const string &table_key,
-	                                                                  lock_guard<std::mutex> &lock);
+	                                                                  lock_guard<std::mutex> &lock, bool validate_cache = true);
 	void RemoveLoadTableResult(const string &table_key);
 
 public:
