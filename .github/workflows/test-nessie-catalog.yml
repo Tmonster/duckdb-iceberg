@@ -15,15 +15,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'true'
+
+      - name: clean machine
+        uses: ./duckdb/.github/actions/cleanup_runner
 
       - name: Download DuckDB-Iceberg artifact
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.artifact-name }}
           path: build/release
-
-      - name: clean machine
-        uses: ./duckdb/.github/actions/cleanup_runner
 
       - name: Restore permissions
         run: |
