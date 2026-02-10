@@ -441,10 +441,8 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Filter Pushdown, skipped 'data_file': '%s', column '%s' with "
 			           "bounds [%s, %s] did not match filter: %s",
-			           data_file.file_path, column.name,
-			           stats.has_lower_bounds ? stats.lower_bound.ToString() : "N/A",
-			           stats.has_upper_bounds ? stats.upper_bound.ToString() : "N/A",
-			           filter.ToString(column.name));
+			           data_file.file_path, column.name, stats.has_lower_bounds ? stats.lower_bound.ToString() : "N/A",
+			           stats.has_upper_bounds ? stats.upper_bound.ToString() : "N/A", filter.ToString(column.name));
 			return false;
 		}
 	}
