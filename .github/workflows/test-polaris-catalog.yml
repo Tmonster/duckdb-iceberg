@@ -19,6 +19,9 @@ jobs:
           fetch-depth: 0
           submodules: 'true'
 
+      - name: clean machine
+        uses: ./duckdb/.github/actions/cleanup_runner
+
       - name: Download DuckDB-Iceberg artifact
         uses: actions/download-artifact@v4
         with:

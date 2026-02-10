@@ -22,6 +22,9 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: build/release
 
+      - name: clean machine
+        uses: ./duckdb/.github/actions/cleanup_runner
+
       - name: Restore permissions
         run: |
           find ./build/release -type f -name 'duckdb*' -exec chmod +x {} \;
