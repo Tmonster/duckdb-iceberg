@@ -121,6 +121,21 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 		return {schema_entry, nullptr, ErrorData()};
 	}
 
+	// check table cache in entries as well
+	{
+		lock_guard<std::mutex> cache_lock(GetMetadataCacheLock());
+		auto cached_result = TryGetValidCachedLoadTableResult(table_key, cache_lock);
+		if (cached_result) {
+			auto &entries = iceberg_schema.tables.GetEntriesMutable();
+			auto entry_it = entries.find(table_name);
+			if (entry_it == entries.end()) {
+				throw CatalogException("Table \"%s\" was deleted in the meantime", table_name);
+			}
+			auto &table_entry = entry_it->second;
+			auto entry = table_entry.GetSchemaVersion(lookup_info.GetAtClause());
+			return {schema_entry, entry, ErrorData()};
+		}
+	}
 	// Verify table existence via GetTable
 	auto get_table_result = IRCAPI::GetTable(context, *this, iceberg_schema, table_name);
 
