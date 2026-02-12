@@ -27,6 +27,14 @@ jobs:
           fetch-depth: 0
           submodules: 'true'
 
+      - name: blah
+        shell: bash
+        run: |
+          cd duckdb
+          git remote add tmonster https://github.com/tmonster/duckdb.git
+          git fetch tmonster
+          git checkout tmonster/maketryLookupEntryvirtual
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
         with:

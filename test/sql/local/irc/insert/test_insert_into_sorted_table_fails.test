@@ -67,3 +67,7 @@ select count(*) from my_datalake.default.table_sort_order;
 statement ok
 ABORT;
 
+query I
+select count(*) from my_datalake.default.table_sort_order;
+----
+60175
