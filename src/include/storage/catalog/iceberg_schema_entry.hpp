@@ -43,6 +43,7 @@ public:
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 	bool HandleCreateConflict(CatalogTransaction &transaction, CatalogType catalog_type, const string &entry_name,
 	                          OnCreateConflict on_conflict);
+	SimilarCatalogEntry GetSimilarEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 	bool DoesExist() const {
 		return exists;
 	}

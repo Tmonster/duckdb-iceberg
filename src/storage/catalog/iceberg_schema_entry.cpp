@@ -247,4 +247,11 @@ IcebergTableSet &IcebergSchemaEntry::GetCatalogSet(CatalogType type) {
 	}
 }
 
+SimilarCatalogEntry IcebergSchemaEntry::GetSimilarEntry(CatalogTransaction transaction,
+                                                        const EntryLookupInfo &lookup_info) {
+	// we only check current entries. we do not list all schemas.
+	// TODO: fix this
+	return SimilarCatalogEntry();
+}
+
 } // namespace duckdb

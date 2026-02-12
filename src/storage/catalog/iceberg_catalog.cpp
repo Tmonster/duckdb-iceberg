@@ -69,7 +69,7 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 	if (lookup_type == CatalogType::SCHEMA_ENTRY) {
 		// Check if schema was deleted in this transaction
 		if (iceberg_transaction.deleted_schemas.count(schema) > 0) {
-			return {nullptr, nullptr, ErrorData()};
+			return {nullptr, nullptr, ErrorData(CatalogException("Schema %s does not exist", schema))};
 		}
 		// Check if schema was created in this transaction
 		if (iceberg_transaction.created_schemas.count(schema) > 0) {
@@ -78,7 +78,7 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 		}
 		// Schema lookup: verify schema existence on the server
 		if (!IRCAPI::VerifySchemaExistence(context, *this, schema)) {
-			return {nullptr, nullptr, ErrorData()};
+			return {nullptr, nullptr, ErrorData(CatalogException("Schema %s does not exist", schema))};
 		}
 		// Schema exists remotely, add it to the local entries
 		auto schema_entry = get_or_create_schema_entry();
@@ -93,7 +93,7 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 
 	// Check if the table was deleted in this transaction
 	if (iceberg_transaction.deleted_tables.count(table_key) > 0) {
-		return {schema_entry, nullptr, ErrorData()};
+		return {schema_entry, nullptr, CatalogException("Table %s does not exist", table_key)};
 	}
 
 	// Check if the table was updated in this transaction
@@ -104,11 +104,17 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 	}
 
 	// Check if the table was already requested in this transaction
-	auto requested_entry = iceberg_transaction.requested_tables.find(table_name);
+	auto requested_entry = iceberg_transaction.requested_tables.find(table_key);
 	if (requested_entry != iceberg_transaction.requested_tables.end()) {
 		if (!requested_entry->second.exists) {
+			// Table not found: check if the schema at least exists
+			if (!IRCAPI::VerifySchemaExistence(context, *this, schema)) {
+				// Schema doesn't exist either, remove the local entry
+				schemas.RemoveEntry(schema);
+				return {nullptr, nullptr, CatalogException("Schema %s does not exist", schema)};
+			}
 			// Table was previously requested and did not exist
-			return {schema_entry, nullptr, ErrorData()};
+			return {schema_entry, nullptr, CatalogException("Table %s does not exist", table_key)};
 		}
 		// Table was previously requested and exists, find it in the schema's table set
 		auto &table_entries = iceberg_schema.tables.GetEntriesMutable();
@@ -118,7 +124,7 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 			return {schema_entry, table_entry, ErrorData()};
 		}
 		// Table no longer in entries (possibly dropped by another transaction)
-		return {schema_entry, nullptr, ErrorData()};
+		return {schema_entry, nullptr, CatalogException("Table %s does not exist", table_key)};
 	}
 
 	// check table cache in entries as well
@@ -129,7 +135,8 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 			auto &entries = iceberg_schema.tables.GetEntriesMutable();
 			auto entry_it = entries.find(table_name);
 			if (entry_it == entries.end()) {
-				throw CatalogException("Table \"%s\" was deleted in the meantime", table_name);
+				// ttable is not in cache, but was requested. table does not exist
+				return {schema_entry, nullptr, CatalogException("Table %s does not exist", table_key)};
 			}
 			auto &table_entry = entry_it->second;
 			auto entry = table_entry.GetSchemaVersion(lookup_info.GetAtClause());
@@ -156,9 +163,9 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 			D_ASSERT(cached_result);
 			const rest_api_objects::LoadTableResult &load_table_result = *cached_result->load_table_result.get();
 			table_info.table_metadata = IcebergTableMetadata::FromLoadTableResult(load_table_result);
-			auto blah = TableInfoCache(table_info.table_metadata.last_sequence_number,
-			                           table_info.table_metadata.current_snapshot_id);
-			iceberg_transaction.requested_tables.emplace(table_name, blah);
+			auto info_cache = TableInfoCache(table_info.table_metadata.last_sequence_number,
+			                                 table_info.table_metadata.current_snapshot_id);
+			iceberg_transaction.requested_tables.emplace(table_key, info_cache);
 		}
 		auto &table_schemas = table_info.table_metadata.schemas;
 		D_ASSERT(!table_schemas.empty());
@@ -169,15 +176,17 @@ CatalogEntryLookup IcebergCatalog::TryLookupEntryInternal(CatalogTransaction tra
 		auto table_entry = table_info.GetSchemaVersion(lookup_info.GetAtClause());
 		return {schema_entry, table_entry, ErrorData()};
 	}
+	auto request_info = TableInfoCache(false);
+	iceberg_transaction.requested_tables.emplace(table_key, request_info);
 
 	// Table not found: check if the schema at least exists
 	if (!IRCAPI::VerifySchemaExistence(context, *this, schema)) {
 		// Schema doesn't exist either, remove the local entry
 		schemas.RemoveEntry(schema);
-		return {nullptr, nullptr, ErrorData()};
+		return {nullptr, nullptr, CatalogException("Schema %s does not exist", schema)};
 	}
 
-	return {schema_entry, nullptr, ErrorData()};
+	return {schema_entry, nullptr, CatalogException("Table %s does not exist", table_name)};
 }
 
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
