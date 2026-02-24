@@ -12,6 +12,7 @@
 #include "duckdb/common/insertion_order_preserving_map.hpp"
 
 #include "metadata/iceberg_table_schema.hpp"
+#include "metadata/iceberg_table_metadata.hpp"
 
 namespace duckdb {
 
@@ -28,11 +29,20 @@ public:
 	Value ToValue(const LogicalType &type) const;
 
 public:
+	static map<idx_t, LogicalType> GetFieldIdToTypeMapping(const IcebergSnapshot &snapshot,
+	                                                       const IcebergTableMetadata &metadata,
+	                                                       const unordered_set<int32_t> &partition_spec_ids);
+	static LogicalType PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type);
+	static LogicalType GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type);
+
+public:
 	IcebergManifestEntryContentType content;
 	string file_path;
 	string file_format;
 	vector<pair<int32_t, Value>> partition_values;
 	int64_t record_count;
+	bool has_first_row_id = false;
+	int64_t first_row_id = 0xDEADBEEF;
 	int64_t file_size_in_bytes;
 	unordered_map<int32_t, int64_t> column_sizes;
 	unordered_map<int32_t, int64_t> value_counts;
@@ -57,6 +67,8 @@ public:
 	int64_t snapshot_id = 0xDEADBEEF;
 	//! Inherited from the 'manifest_file'
 	int32_t partition_spec_id = 0xDEADBEEF;
+	//! The index into the manifest_file vector where the entry originated from
+	idx_t manifest_file_idx = DConstants::INVALID_INDEX;
 	IcebergDataFile data_file;
 
 public:

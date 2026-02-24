@@ -67,8 +67,6 @@ enum class IcebergManifestContentType : uint8_t {
 	DELETE = 1,
 };
 
-//! TODO: why do we call this IcebergManifestFile? this represents a 'manifest_file' in the spec
-//! An entry in the manifest list file (top level AVRO file)
 struct IcebergManifestFile {
 public:
 	//! Path to the manifest AVRO file
@@ -77,6 +75,8 @@ public:
 	int64_t manifest_length;
 	//! The id of the partition spec referenced by this manifest (and the data files that are part of it)
 	int32_t partition_spec_id;
+	bool has_first_row_id = false;
+	sequence_number_t first_row_id = 0xDEADBEEF;
 	//! either data or deletes
 	IcebergManifestContentType content;
 	//! sequence_number when manifest was added to table (0 for Iceberg v1)
@@ -134,6 +134,7 @@ public:
 	IcebergManifestList(const string &path) : path(path) {
 	}
 
+public:
 	vector<IcebergManifestFile> &GetManifestFilesMutable();
 	const vector<IcebergManifestFile> &GetManifestFilesConst() const;
 
@@ -147,6 +148,10 @@ public:
 	                            DatabaseInstance &db, ClientContext &context);
 	void AddToManifestEntries(vector<IcebergManifestFile> &manifest_list_entries);
 	vector<IcebergManifestFile> GetManifestListEntries();
+
+public:
+	static LogicalType FieldSummaryType();
+	static Value FieldSummaryFieldIds();
 
 public:
 	string path;

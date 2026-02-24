@@ -21,6 +21,7 @@
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
+#include "duckdb/planner/expression_binder/table_function_binder.hpp"
 
 namespace duckdb {
 
@@ -33,22 +34,45 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTableInformation 
 	}
 
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto table_key = table.GetTableKey();
 
+	// Only check cache if MAX_TABLE_STALENESS option is set
+	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
+		lock_guard<std::mutex> cache_lock(ic_catalog.GetMetadataCacheLock());
+		auto cached_result = ic_catalog.TryGetValidCachedLoadTableResult(table_key, cache_lock);
+		if (cached_result) {
+			// Use the cached result instead of making a new request
+			table.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_result->load_table_result);
+			auto &schemas = table.table_metadata.schemas;
+			D_ASSERT(!schemas.empty());
+			for (auto &table_schema : schemas) {
+				table.CreateSchemaVersion(*table_schema.second);
+			}
+			return true;
+		}
+	}
+
+	// No valid cached result or caching disabled, make a new request
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, schema, table.name);
 	if (get_table_result.has_error) {
 		if (get_table_result.error_._error.type == "NoSuchIcebergTableException") {
 			return false;
 		}
 		if (get_table_result.status_ == HTTPStatusCode::Forbidden_403 ||
-		    get_table_result.status_ == HTTPStatusCode::Unauthorized_401) {
+		    get_table_result.status_ == HTTPStatusCode::Unauthorized_401 ||
+		    get_table_result.status_ == HTTPStatusCode::NotFound_404) {
 			return false;
 		}
 		throw HTTPException(get_table_result.error_._error.message);
 	}
-	auto table_key = table.GetTableKey();
 	ic_catalog.StoreLoadTableResult(table_key, std::move(get_table_result.result_));
-	auto &cached_table_result = ic_catalog.GetLoadTableResult(table_key);
-	table.table_metadata = IcebergTableMetadata::FromLoadTableResult(*cached_table_result.load_table_result);
+	{
+		lock_guard<std::mutex> cache_lock(ic_catalog.GetMetadataCacheLock());
+		auto cached_table_result = ic_catalog.TryGetValidCachedLoadTableResult(table_key, cache_lock, false);
+		D_ASSERT(cached_table_result);
+		auto &load_table_result = *cached_table_result->load_table_result;
+		table.table_metadata = IcebergTableMetadata::FromLoadTableResult(load_table_result);
+	}
 	auto &schemas = table.table_metadata.schemas;
 
 	//! It should be impossible to have a metadata file without any schema
@@ -121,10 +145,51 @@ void IcebergTableSet::LoadEntries(ClientContext &context) {
 	iceberg_transaction.listed_schemas.insert(schema.name);
 }
 
+static Value ParseFormatVersionProperty(TableFunctionBinder &binder, ClientContext &context,
+                                        const ParsedExpression &expr_ref, string property_name, LogicalType type) {
+	auto expr = expr_ref.Copy();
+	auto bound_expr = binder.Bind(expr);
+	if (bound_expr->HasParameter()) {
+		throw ParameterNotResolvedException();
+	}
+
+	auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+	if (val.IsNull()) {
+		throw BinderException("NULL is not supported as a valid option for '%s'", property_name);
+	}
+	if (!val.DefaultTryCastAs(type, true)) {
+		throw InvalidInputException("Can't cast 'format-version' property (%s) to %s", val.ToString(), type.ToString());
+	}
+	return val;
+}
+
 bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
                                      CreateTableInfo &info) {
 	auto table_name = info.table;
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+
+	auto binder = Binder::CreateBinder(context);
+	TableFunctionBinder property_binder(*binder, context, "format-version");
+
+	optional_idx iceberg_version;
+	case_insensitive_map_t<Value> table_properties;
+	// format version must be verified
+	auto format_version_it = info.options.find("format-version");
+	if (format_version_it != info.options.end()) {
+		iceberg_version = ParseFormatVersionProperty(property_binder, context, *format_version_it->second,
+		                                             "format-version", LogicalType::INTEGER)
+		                      .GetValue<int32_t>();
+		if (iceberg_version.GetIndex() != 2) {
+			throw InvalidInputException("DuckDB-Iceberg only supports creating version 2 Iceberg tables");
+		}
+	}
+	string location;
+	auto location_it = info.options.find("location");
+	if (location_it != info.options.end()) {
+		location =
+		    ParseFormatVersionProperty(property_binder, context, *location_it->second, "location", LogicalType::VARCHAR)
+		        .GetValue<string>();
+	}
 
 	auto key = IcebergTableInformation::GetTableKey(schema.namespace_items, info.table);
 	iceberg_transaction.updated_tables.emplace(key, IcebergTableInformation(catalog, schema, info.table));
@@ -136,6 +201,21 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	table_ptr->table_info.table_metadata.schemas[0] = IcebergCreateTableRequest::CreateIcebergSchema(table_ptr);
 	table_ptr->table_info.table_metadata.current_schema_id = 0;
 	table_ptr->table_info.table_metadata.schemas[0]->schema_id = 0;
+	table_ptr->table_info.table_metadata.iceberg_version = 2;
+
+	// Get Location
+	if (!location.empty()) {
+		table_ptr->table_info.table_metadata.location = location;
+	}
+	for (auto &option : info.options) {
+		if (option.first == "format-version" || option.first == "location") {
+			continue;
+		}
+		auto option_val =
+		    ParseFormatVersionProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
+		        .GetValue<string>();
+		table_ptr->table_info.table_metadata.table_properties.emplace(option.first, option_val);
+	}
 
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
@@ -143,10 +223,13 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	    make_uniq<const rest_api_objects::LoadTableResult>(IRCAPI::CommitNewTable(context, catalog, table_ptr));
 
 	catalog.StoreLoadTableResult(key, std::move(load_table_result));
-	auto &cached_table_result = catalog.GetLoadTableResult(key);
-
-	table_ptr->table_info.table_metadata =
-	    IcebergTableMetadata::FromTableMetadata(cached_table_result.load_table_result->metadata);
+	{
+		lock_guard<std::mutex> cache_lock(catalog.GetMetadataCacheLock());
+		auto cached_table_result = catalog.TryGetValidCachedLoadTableResult(key, cache_lock, false);
+		D_ASSERT(cached_table_result);
+		auto &load_table_result = cached_table_result->load_table_result;
+		table_ptr->table_info.table_metadata = IcebergTableMetadata::FromTableMetadata(load_table_result->metadata);
+	}
 
 	// if we stage created the table, we add an assert create
 	if (catalog.attach_options.supports_stage_create) {
@@ -162,6 +245,7 @@ bool IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &cat
 	table_info.AddSortOrder(iceberg_transaction);
 	table_info.SetDefaultSortOrder(iceberg_transaction);
 	table_info.SetLocation(iceberg_transaction);
+	table_info.SetProperties(iceberg_transaction, table_info.table_metadata.table_properties);
 	return true;
 }
 
@@ -181,8 +265,8 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	if (transaction_entry != iceberg_transaction.updated_tables.end()) {
 		return transaction_entry->second.GetSchemaVersion(lookup.GetAtClause());
 	}
-	auto previous_requested_snapshot = iceberg_transaction.requested_tables.find(table_name);
-	if (previous_requested_snapshot != iceberg_transaction.requested_tables.end()) {
+	auto previous_request_info = iceberg_transaction.GetTableRequestResult(table_key);
+	if (previous_request_info.exists) {
 		// transaction has already looked up this table, find it in entries
 		auto entry = entries.find(table_name);
 		if (entry == entries.end()) {
@@ -195,15 +279,17 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		return entry->second.GetSchemaVersion(lookup.GetAtClause());
 	}
 
-	if (!IRCAPI::VerifyTableExistence(context, ic_catalog, schema, table_name)) {
-		return nullptr;
-	}
 	if (entries.find(table_name) != entries.end()) {
 		entries.erase(table_name);
 	}
 	auto it = entries.emplace(table_name, IcebergTableInformation(ic_catalog, schema, table_name));
 	auto entry = it.first;
-	FillEntry(context, entry->second);
+	if (!FillEntry(context, entry->second)) {
+		// Table doesn't exist
+		entries.erase(entry);
+		iceberg_transaction.RecordTableRequest(table_key);
+		return nullptr;
+	}
 	auto ret = entry->second.GetSchemaVersion(lookup.GetAtClause());
 
 	// get the latest information and save it to the transaction cache
@@ -219,8 +305,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		latest_snapshot_id = -1;
 	}
 
-	iceberg_transaction.requested_tables.emplace(table_name,
-	                                             TableInfoCache(latest_sequence_number, latest_snapshot_id));
+	iceberg_transaction.RecordTableRequest(table_key, latest_sequence_number, latest_snapshot_id);
 	return ret;
 }
 
