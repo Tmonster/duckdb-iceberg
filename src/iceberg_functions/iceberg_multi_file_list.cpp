@@ -403,8 +403,15 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 		auto &metadata = GetMetadata();
 		auto &data_file = manifest_entry.data_file;
 		// First check if there are partitions
+		auto partition_spec_it = metadata.partition_specs.find(manifest_entry.partition_spec_id);
+		if (data_file.partition_values.empty() && partition_spec_it != metadata.partition_specs.end() &&
+		    !partition_spec_it->second.fields.empty()) {
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Iceberg Filter Pushdown, skipping partition filter for 'data_file': '%s', "
+			           "no partition values available (partition_spec_id=%d)",
+			           data_file.file_path, manifest_entry.partition_spec_id);
+		}
 		if (!data_file.partition_values.empty()) {
-			auto partition_spec_it = metadata.partition_specs.find(manifest_entry.partition_spec_id);
 			if (partition_spec_it == metadata.partition_specs.end()) {
 				throw InvalidConfigurationException(
 				    "Data file %s has partition spec %d while the metadata does not have this partition spec",
