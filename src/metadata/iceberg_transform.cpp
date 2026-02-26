@@ -2,6 +2,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/types/value.hpp"
 
 namespace duckdb {
 
@@ -105,7 +106,7 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 }
 
 string IcebergTransform::PartitionValueToString(const Value &partition_value) const {
-	if (partition_value.IsNull()) {
+	if (partition_value.IsNull() || partition_value.ToString() == "NULL") {
 		return "NULL";
 	}
 	switch (type) {
