@@ -182,8 +182,9 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<string
 
 		auto found_snapshot = metadata.GetSnapshot(options.snapshot_lookup);
 		if (found_snapshot) {
-			DUCKDB_LOG(context, IcebergLogType, "Iceberg selected snapshot_id=%lld, timestamp=%s",
-			           found_snapshot->snapshot_id, Timestamp::ToString(found_snapshot->timestamp_ms));
+			DUCKDB_LOG(context, IcebergLogType, "Iceberg selected snapshot_id=%lld, timestamp=%s, sequence_number=%lld",
+			           found_snapshot->snapshot_id, Timestamp::ToString(found_snapshot->timestamp_ms),
+			           found_snapshot->sequence_number);
 		} else {
 			DUCKDB_LOG(context, IcebergLogType, "Iceberg table has no snapshots, scanning empty table");
 		}
@@ -434,13 +435,6 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 		auto &data_file = manifest_entry.data_file;
 		// First check if there are partitions
 		auto partition_spec_it = metadata.partition_specs.find(manifest_entry.partition_spec_id);
-		if (data_file.partition_values.empty() && partition_spec_it != metadata.partition_specs.end() &&
-		    !partition_spec_it->second.fields.empty()) {
-			DUCKDB_LOG(context, IcebergLogType,
-			           "Iceberg Filter Pushdown, skipping partition filter for 'data_file': '%s', "
-			           "no partition values available (partition_spec_id=%d)",
-			           data_file.file_path, manifest_entry.partition_spec_id);
-		}
 		if (!data_file.partition_values.empty()) {
 			if (partition_spec_it == metadata.partition_specs.end()) {
 				throw InvalidConfigurationException(
@@ -498,12 +492,17 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 				// if the filter doesn't match the partition value, we don't need to scan the data file
 				if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
 					auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema, column_id, 0);
-					DUCKDB_LOG(context, IcebergLogType,
-					           "Iceberg Filter Pushdown, skipped 'data_file': '%s', partition column '%s' with "
-					           "transform '%s', value '%s' did not match filter: %s",
-					           data_file.file_path, source_column.name, field.transform.RawType(),
-					           stats.has_lower_bounds ? stats.lower_bound.ToString() : "NULL",
-					           table_filter->ToString(source_column.name));
+					auto partition_value_raw_str = stats.has_lower_bounds ? stats.lower_bound.ToString() : "NULL";
+					auto partition_value_transformed_str =
+					    stats.has_lower_bounds ? field.transform.PartitionValueToString(stats.lower_bound.ToString())
+					                           : "NULL";
+					DUCKDB_LOG(
+					    context, IcebergLogType,
+					    "Iceberg Filter Pushdown, skipped 'data_file': '%s', partition column '%s' has raw value %s "
+					    "with transform '%s'. '%s(%s)=%s' does not match filter: %s",
+					    data_file.file_path, source_column.name, partition_value_raw_str, field.transform.RawType(),
+					    field.transform.RawType(), partition_value_raw_str, partition_value_transformed_str,
+					    table_filter->ToString(source_column.name));
 					return false;
 				}
 			}
@@ -563,6 +562,18 @@ bool IcebergMultiFileList::FileMatchesFilter(const IcebergManifestEntry &manifes
 		}
 
 		auto &filter = *it->second;
+		// if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
+		// 	auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema, column_id, 0);
+		// 	auto partition_value_raw_str = stats.has_lower_bounds ? stats.lower_bound.ToString() : "NULL";
+		// 	auto partition_value_transformed_str = stats.has_lower_bounds ?
+		// field.transform.PartitionValueToString(stats.lower_bound.ToString()) : "NULL"; 	DUCKDB_LOG(context,
+		// IcebergLogType, 			   "Iceberg Filter Pushdown, skipped 'data_file': '%s', partition column '%s' has raw value %s "
+		// 			   "with transform '%s'. '%s(%s)=%s' does not match filter: %s",
+		// 			   data_file.file_path, source_column.name, partition_value_raw_str, field.transform.RawType(),
+		// 			   field.transform.RawType(), partition_value_raw_str, partition_value_transformed_str,
+		// 			   table_filter->ToString(source_column.name));
+		// 	return false;
+		// }
 		if (!IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity())) {
 			//! If any predicate fails, exclude the file
 			DUCKDB_LOG(context, IcebergLogType,
