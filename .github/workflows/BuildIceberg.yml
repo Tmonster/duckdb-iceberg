@@ -27,6 +27,15 @@ jobs:
           fetch-depth: 0
           submodules: 'true'
 
+      - name: Different httpfs
+        run: |
+          cd duckdb
+          cat "duckdb_extension_load(httpfs
+            LOAD_TESTS
+            GIT_URL https://github.com/carlopi/duckdb-httpfs
+            GIT_TAG 271b92645dea1ec9b127ae42804ab974cf1699b9
+          )" > .github/config/extensions/httpfs.cmake
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
         with:
