@@ -33,7 +33,7 @@ jobs:
           duckdb_extension_load(httpfs
             LOAD_TESTS
             GIT_URL https://github.com/carlopi/duckdb-httpfs
-            GIT_TAG 271b92645dea1ec9b127ae42804ab974cf1699b9
+            GIT_TAG ee8b3865740d24ce2e040879aff16f76bee26153
           )
           EOF
 
