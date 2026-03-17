@@ -335,7 +335,6 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	// write out the new manifest file
 	auto &irc_table = table.Cast<IcebergTableEntry>();
 	auto &table_info = irc_table.table_info;
-	auto &transaction = IcebergTransaction::Get(context, table.catalog);
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
 
 	if (!global_state.written_files.empty()) {
@@ -414,7 +413,6 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 		throw InternalException("Couldn't locate the scan that feeds the delete information");
 	}
 	auto &bind_data = table_scan->bind_data->Cast<MultiFileBindData>();
-	auto &reader = bind_data.multi_file_reader->Cast<IcebergMultiFileReader>();
 	auto &file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
 	return planner.Make<IcebergDelete>(table, file_list, child_plan, std::move(row_id_indexes));
 }
@@ -424,17 +422,23 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for deletion from Iceberg table");
 	}
+	auto &ic_table_entry = op.table.Cast<IcebergTableEntry>();
+	auto iceberg_version = ic_table_entry.table_info.table_metadata.iceberg_version;
+	if (iceberg_version < 2) {
+		throw NotImplementedException("Delete from Iceberg V%d tables",
+		                              ic_table_entry.table_info.table_metadata.iceberg_version);
+	}
 
 	vector<idx_t> row_id_indexes;
 	// we only push 2 columns for positional deletes
-	for (idx_t i = 0; i < 2; i++) {
-		auto &bound_ref = op.expressions[1 + i]->Cast<BoundReferenceExpression>();
-		row_id_indexes.push_back(bound_ref.index);
+	idx_t column_offset = 0;
+	if (iceberg_version >= 3) {
+		//! The row ids of the table contain the _row_id column, which we're not interested in
+		column_offset = 1;
 	}
-	auto &ic_table_entry = op.table.Cast<IcebergTableEntry>();
-	if (ic_table_entry.table_info.table_metadata.iceberg_version < 2) {
-		throw NotImplementedException("Delete from Iceberg V%d tables",
-		                              ic_table_entry.table_info.table_metadata.iceberg_version);
+	for (idx_t i = 0; i < 2; i++) {
+		auto &bound_ref = op.expressions[column_offset + i]->Cast<BoundReferenceExpression>();
+		row_id_indexes.push_back(bound_ref.index);
 	}
 
 	auto allows_positional_deletes =

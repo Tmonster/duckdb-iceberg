@@ -11,7 +11,7 @@ ManifestListReader::ManifestListReader(const AvroScan &scan) : BaseManifestReade
 ManifestListReader::~ManifestListReader() {
 }
 
-idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifestFile> &result) {
+idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifestListEntry> &result) {
 	if (finished) {
 		return 0;
 	}
@@ -30,7 +30,7 @@ idx_t ManifestListReader::Read(idx_t count, vector<IcebergManifestFile> &result)
 	return total_added;
 }
 
-idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestFile> &result) {
+idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergManifestListEntry> &result) {
 	D_ASSERT(offset < chunk.size());
 	D_ASSERT(offset + count <= chunk.size());
 
@@ -121,9 +121,12 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 			manifest.existing_rows_count = existing_rows_count_data[index];
 			manifest.deleted_rows_count = deleted_rows_count_data[index];
 		} else {
-			manifest.content = IcebergManifestContentType::DATA;
+			//! SPEC: Manifest list field sequence-number must default to 0
 			manifest.sequence_number = 0;
+			//! SPEC: Manifest list field min-sequence-number must default to 0
 			manifest.min_sequence_number = 0;
+			//! SPEC: Manifest list field content must default to 0 (data)
+			manifest.content = IcebergManifestContentType::DATA;
 		}
 
 		if (iceberg_version >= 3) {
@@ -151,7 +154,7 @@ idx_t ManifestListReader::ReadChunk(idx_t offset, idx_t count, vector<IcebergMan
 				summaries.push_back(summary);
 			}
 		}
-		result.push_back(manifest);
+		result.push_back(std::move(manifest));
 	}
 	return count;
 }
