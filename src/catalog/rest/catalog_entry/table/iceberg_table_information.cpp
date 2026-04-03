@@ -443,13 +443,13 @@ void IcebergTableInformation::SetPartitionedBy(IcebergTransaction &transaction,
 	}
 }
 
-optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup) {
+optional_ptr<CatalogEntry> IcebergTableInformation::GetSchemaVersion(const IcebergSnapshotLookup &snapshot_lookup,
+                                                                     bool is_time_travel) {
 	D_ASSERT(!schema_versions.empty());
-	if (table_metadata.snapshots.empty()) {
-		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
-	}
-	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
-	return schema_versions[snapshot_info.schema_id].get();
+	auto schema_id = !is_time_travel || table_metadata.snapshots.empty()
+	                     ? table_metadata.GetCurrentSchemaId()
+	                     : table_metadata.GetSnapshot(snapshot_lookup).schema_id;
+	return schema_versions[schema_id].get();
 }
 
 idx_t IcebergTableInformation::GetIcebergVersion() const {
