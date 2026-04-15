@@ -181,6 +181,10 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		// Geometry is an Iceberg v3 type stored as WKB binary in parquet
 		return LogicalType::GEOMETRY();
 	}
+	if (type_str == "unknown") {
+		// Iceberg v3 unknown type: all values are null
+		return LogicalType::SQLNULL;
+	}
 	throw InvalidConfigurationException("Unrecognized primitive type: %s", type_str);
 }
 
