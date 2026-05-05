@@ -25,6 +25,7 @@
 namespace duckdb {
 class OAuth2Authorization;
 constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER;
+constexpr column_t IcebergMultiFileReader::COLUMN_IDENTIFIER_DATA_SEQUENCE_NUMBER;
 
 IcebergTableEntry::IcebergTableEntry(IcebergTableInformation &table_info, Catalog &catalog, SchemaCatalogEntry &schema,
                                      CreateTableInfo &info, optional_idx schema_id)
@@ -248,6 +249,8 @@ virtual_column_map_t IcebergTableEntry::VirtualColumns() {
 	               TableColumn("file_row_number", LogicalType::BIGINT));
 	result.emplace(IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER,
 	               TableColumn("_last_updated_sequence_number", LogicalType::BIGINT));
+	result.emplace(IcebergMultiFileReader::COLUMN_IDENTIFIER_DATA_SEQUENCE_NUMBER,
+	               TableColumn("_iceberg_data_sequence_number", LogicalType::BIGINT));
 	return result;
 }
 

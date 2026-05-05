@@ -587,6 +587,18 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 		column_id = MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
 		return ConstructVirtualRowIdExpression(context, type, entry->second, local_idx.GetIndex());
 	}
+	if (column_id == COLUMN_IDENTIFIER_DATA_SEQUENCE_NUMBER) {
+		// Strict per-file sequence number from the manifest. No COALESCE with any in-file column.
+		if (!reader_data.file_to_be_opened.extended_info) {
+			throw InternalException("Missing extended info for data file when reading _iceberg_data_sequence_number");
+		}
+		auto &options = reader_data.file_to_be_opened.extended_info->options;
+		auto entry = options.find("sequence_number");
+		if (entry == options.end()) {
+			return make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT));
+		}
+		return make_uniq<BoundConstantExpression>(entry->second);
+	}
 	if (column_id == COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER) {
 		// get the row id start for this file
 		if (!reader_data.file_to_be_opened.extended_info) {

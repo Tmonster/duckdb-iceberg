@@ -72,6 +72,10 @@ public:
 	                    const vector<ColumnIndex> &column_indexes) const;
 	void ScanPuffinFile(const BoundIcebergManifestEntry &entry) const;
 	unique_ptr<DeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
+	//! Reads delete manifest contents (Avro) and binds manifest entries into delete_manifest_entries.
+	//! Idempotent: tracks committed_delete_entries_enumerated and transaction_delete_idx.
+	//! Does NOT open delete file contents — that happens in ProcessDeletes.
+	void EnumerateDeleteManifestEntries() const;
 	void ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
 	vector<reference<const IcebergEqualityDeleteRow>>
@@ -145,6 +149,10 @@ public:
 	//! The columns needed by the equality deletes that aren't referenced by the scan
 	mutable unordered_map<int32_t, column_t> equality_id_to_result_id;
 	mutable idx_t transaction_delete_idx = 0;
+	//! Tracks whether committed delete manifests have been bound and pushed to delete_manifest_entries.
+	mutable bool committed_delete_entries_enumerated = false;
+	//! Watermark into delete_manifest_entries: entries [0, delete_scan_watermark) have had their file contents scanned.
+	mutable idx_t delete_scan_watermark = 0;
 
 	mutable bool initialized = false;
 	const IcebergOptions &options;

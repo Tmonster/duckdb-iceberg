@@ -33,6 +33,9 @@ public:
 struct IcebergMultiFileReader : public MultiFileReader {
 public:
 	static constexpr column_t COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER = UINT64_C(10000000000000000000);
+	//! Strict per-file sequence number from the manifest entry; constant for every row in a file.
+	//! Distinct from _last_updated_sequence_number (which can COALESCE with an in-file row-level column).
+	static constexpr column_t COLUMN_IDENTIFIER_DATA_SEQUENCE_NUMBER = UINT64_C(10000000000000000001);
 
 public:
 	IcebergMultiFileReader(shared_ptr<TableFunctionInfo> function_info);
