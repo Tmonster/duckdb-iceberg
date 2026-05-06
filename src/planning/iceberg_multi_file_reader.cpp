@@ -505,6 +505,10 @@ bool IcebergMultiFileReader::ParseOption(const string &key, const Value &val, Mu
 		snapshot_lookup.snapshot_id = val.GetValue<uint64_t>();
 		return true;
 	}
+	if (loption == "__internal_skip_equality_deletes") {
+		this->options.skip_equality_deletes = BooleanValue::Get(val);
+		return true;
+	}
 	if (loption == "snapshot_from_timestamp") {
 		if (snapshot_lookup.GetSource() != SnapshotSource::LATEST) {
 			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
@@ -589,12 +593,19 @@ unique_ptr<Expression> IcebergMultiFileReader::GetVirtualColumnExpression(
 	}
 	if (column_id == COLUMN_IDENTIFIER_DATA_SEQUENCE_NUMBER) {
 		// Strict per-file sequence number from the manifest. No COALESCE with any in-file column.
-		if (!reader_data.file_to_be_opened.extended_info) {
-			throw InternalException("Missing extended info for data file when reading _iceberg_data_sequence_number");
+		// `file_to_be_opened` is only populated when the reader was constructed for an *unopened* file;
+		// for the bind-time initial_reader (already open), look at `reader_data.reader->file` instead.
+		shared_ptr<ExtendedOpenFileInfo> info;
+		if (reader_data.file_to_be_opened.extended_info) {
+			info = reader_data.file_to_be_opened.extended_info;
+		} else if (reader_data.reader) {
+			info = reader_data.reader->file.extended_info;
 		}
-		auto &options = reader_data.file_to_be_opened.extended_info->options;
-		auto entry = options.find("sequence_number");
-		if (entry == options.end()) {
+		if (!info) {
+			return make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT));
+		}
+		auto entry = info->options.find("sequence_number");
+		if (entry == info->options.end()) {
 			return make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT));
 		}
 		return make_uniq<BoundConstantExpression>(entry->second);

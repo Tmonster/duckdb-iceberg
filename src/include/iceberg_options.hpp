@@ -30,6 +30,9 @@ struct IcebergOptions {
 	bool infer_schema = true;
 	string table_version = DEFAULT_TABLE_VERSION;
 	string version_name_format = DEFAULT_TABLE_VERSION_FORMAT;
+	//! Set when iceberg_scan is invoked as the data-side input of a bind_operator-built anti-join plan.
+	//! Suppresses the FinalizeChunk equality-delete pass, since the join above the scan does that work.
+	bool skip_equality_deletes = false;
 
 	IcebergSnapshotLookup snapshot_lookup;
 };

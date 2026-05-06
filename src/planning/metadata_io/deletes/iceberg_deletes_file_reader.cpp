@@ -2,8 +2,10 @@
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 
 #include "function/iceberg_functions.hpp"
+#include "planning/iceberg_multi_file_reader.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 
 namespace duckdb {
@@ -70,6 +72,32 @@ IcebergDeleteFileReader::IcebergDeleteFileReader(shared_ptr<TableFunctionInfo> f
 
 unique_ptr<MultiFileReader> IcebergDeleteFileReader::CreateInstance(const TableFunction &table) {
 	return make_uniq<IcebergDeleteFileReader>(table.function_info);
+}
+
+unique_ptr<Expression> IcebergDeleteFileReader::GetVirtualColumnExpression(
+    ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &local_columns,
+    idx_t &column_id, const LogicalType &type, MultiFileLocalIndex local_idx,
+    optional_ptr<MultiFileColumnDefinition> &global_column_reference) {
+	if (column_id == IcebergMultiFileReader::COLUMN_IDENTIFIER_DATA_SEQUENCE_NUMBER) {
+		// `file_to_be_opened` is only populated when the reader was constructed for an *unopened* file;
+		// for the bind-time initial_reader (already open), look at `reader_data.reader->file` instead.
+		shared_ptr<ExtendedOpenFileInfo> info;
+		if (reader_data.file_to_be_opened.extended_info) {
+			info = reader_data.file_to_be_opened.extended_info;
+		} else if (reader_data.reader) {
+			info = reader_data.reader->file.extended_info;
+		}
+		if (!info) {
+			return make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT));
+		}
+		auto entry = info->options.find("sequence_number");
+		if (entry == info->options.end()) {
+			return make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT));
+		}
+		return make_uniq<BoundConstantExpression>(entry->second);
+	}
+	return MultiFileReader::GetVirtualColumnExpression(context, reader_data, local_columns, column_id, type, local_idx,
+	                                                   global_column_reference);
 }
 
 shared_ptr<MultiFileList> IcebergDeleteFileReader::CreateFileList(ClientContext &context, const vector<string> &paths,

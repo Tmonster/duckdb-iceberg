@@ -1083,6 +1083,13 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 		auto &bound_manifest_entry = delete_manifest_entries[delete_scan_watermark];
 		auto &manifest_entry = bound_manifest_entry.entry;
 		auto &data_file = manifest_entry.data_file;
+		// When the data-side scan is the input of a bind_operator-built anti-join plan,
+		// skip equality-delete file contents — the join layer above handles them.
+		// Positional deletes still flow through the per-file DeleteFilter mechanism.
+		if (options.skip_equality_deletes && data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+			delete_scan_watermark++;
+			continue;
+		}
 		if (StringUtil::CIEquals(data_file.file_format, "parquet")) {
 			ScanDeleteFile(bound_manifest_entry, global_columns, column_indexes);
 		} else if (StringUtil::CIEquals(data_file.file_format, "puffin")) {

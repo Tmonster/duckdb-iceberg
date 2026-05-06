@@ -1,6 +1,6 @@
-# name: test/sql/cloud/glue/test_equality_deletes.test
+# name: test/sql/cloud/test_equality_deletes.test
 # description: test integration with iceberg catalog read
-# group: [glue]
+# group: [cloud]
 
 require avro
 

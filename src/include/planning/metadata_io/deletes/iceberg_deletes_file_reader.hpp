@@ -28,6 +28,12 @@ struct IcebergDeleteFileReader : public MultiFileReader {
 	shared_ptr<MultiFileList> CreateFileList(ClientContext &context, const vector<string> &paths,
 	                                         const FileGlobInput &glob_input) override;
 
+	unique_ptr<Expression>
+	GetVirtualColumnExpression(ClientContext &context, MultiFileReaderData &reader_data,
+	                           const vector<MultiFileColumnDefinition> &local_columns, idx_t &column_id,
+	                           const LogicalType &type, MultiFileLocalIndex local_idx,
+	                           optional_ptr<MultiFileColumnDefinition> &global_column_reference) override;
+
 	static unique_ptr<MultiFileReader> CreateInstance(const TableFunction &table);
 
 public:
