@@ -123,8 +123,8 @@ static unique_ptr<SelectNode> BuildEqualityDeleteFileSelectNode(const string &de
 //! Build a SubqueryRef whose body is either a single per-file SelectNode (when the group has one
 //! delete file) or a UNION ALL SetOperationNode across all the group's per-file SelectNodes.
 //! All files in a group share the same equality-ids schema, so UNION ALL is well-typed.
-static unique_ptr<SubqueryRef>
-BuildEqualityDeleteGroupSubquery(const vector<pair<string, int64_t>> &files, const string &alias) {
+static unique_ptr<SubqueryRef> BuildEqualityDeleteGroupSubquery(const vector<pair<string, int64_t>> &files,
+                                                                const string &alias) {
 	D_ASSERT(!files.empty());
 	auto select_stmt = make_uniq<SelectStatement>();
 	if (files.size() == 1) {
