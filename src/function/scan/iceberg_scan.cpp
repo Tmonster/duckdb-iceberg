@@ -11,6 +11,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/parser/query_node/set_operation_node.hpp"
 #include "duckdb/parser/statement/select_statement.hpp"
 #include "duckdb/parser/tableref/emptytableref.hpp"
 #include "duckdb/parser/tableref/joinref.hpp"
@@ -98,19 +99,17 @@ static vector<unique_ptr<ParsedExpression>> BuildIcebergScanChildren(const vecto
 	return children;
 }
 
-//! Build a SubqueryRef wrapping `parquet_scan('<path>')` and projecting all of its columns plus a
-//! constant `_iceberg_data_sequence_number` column. The subquery's alias is set so the join condition
-//! can reference its columns.
-static unique_ptr<SubqueryRef> BuildEqualityDeleteSubquery(const string &delete_file_path, int64_t sequence_number,
-                                                           const string &alias) {
-	// FROM parquet_scan('<delete_file_path>')
+//! Build the per-file SelectNode `SELECT *, <seq>::BIGINT AS _iceberg_data_sequence_number
+//! FROM parquet_scan('<delete_file_path>')`. Used as a UNION ALL leg when multiple delete files
+//! share an equality-ids schema, or directly as the subquery body when there is just one file.
+static unique_ptr<SelectNode> BuildEqualityDeleteFileSelectNode(const string &delete_file_path,
+                                                                int64_t sequence_number) {
 	vector<unique_ptr<ParsedExpression>> parquet_args;
 	parquet_args.push_back(make_uniq<ConstantExpression>(Value(delete_file_path)));
 	auto parquet_func = make_uniq<FunctionExpression>("parquet_scan", std::move(parquet_args));
 	auto parquet_ref = make_uniq<TableFunctionRef>();
 	parquet_ref->function = std::move(parquet_func);
 
-	// SELECT *, CAST(<seq>::BIGINT AS BIGINT) AS _iceberg_data_sequence_number FROM (parquet_scan)
 	auto select_node = make_uniq<SelectNode>();
 	select_node->select_list.push_back(make_uniq<StarExpression>());
 	auto seq_constant = make_uniq<ConstantExpression>(Value::BIGINT(sequence_number));
@@ -118,12 +117,28 @@ static unique_ptr<SubqueryRef> BuildEqualityDeleteSubquery(const string &delete_
 	seq_cast->alias = "_iceberg_data_sequence_number";
 	select_node->select_list.push_back(std::move(seq_cast));
 	select_node->from_table = std::move(parquet_ref);
+	return select_node;
+}
 
+//! Build a SubqueryRef whose body is either a single per-file SelectNode (when the group has one
+//! delete file) or a UNION ALL SetOperationNode across all the group's per-file SelectNodes.
+//! All files in a group share the same equality-ids schema, so UNION ALL is well-typed.
+static unique_ptr<SubqueryRef>
+BuildEqualityDeleteGroupSubquery(const vector<pair<string, int64_t>> &files, const string &alias) {
+	D_ASSERT(!files.empty());
 	auto select_stmt = make_uniq<SelectStatement>();
-	select_stmt->node = std::move(select_node);
-
-	auto subquery_ref = make_uniq<SubqueryRef>(std::move(select_stmt), alias);
-	return subquery_ref;
+	if (files.size() == 1) {
+		select_stmt->node = BuildEqualityDeleteFileSelectNode(files[0].first, files[0].second);
+	} else {
+		auto set_op = make_uniq<SetOperationNode>();
+		set_op->setop_type = SetOperationType::UNION;
+		set_op->setop_all = true;
+		for (auto &f : files) {
+			set_op->children.push_back(BuildEqualityDeleteFileSelectNode(f.first, f.second));
+		}
+		select_stmt->node = std::move(set_op);
+	}
+	return make_uniq<SubqueryRef>(std::move(select_stmt), alias);
 }
 
 //! Build the AND-conjunction condition for one anti-join: equality columns by name (NOT DISTINCT FROM)
@@ -234,37 +249,75 @@ static unique_ptr<TableRef> IcebergScanBindReplace(ClientContext &context, Table
 		return nullptr;
 	}
 
-	// 2. Build the data-side TableFunctionRef. iceberg_scan(<original positional args>, <named params>,
+	// 2. Group equality delete files by their (sorted) equality_column_names — files in the same
+	//    group share a join schema and can be UNION ALL'd into the right side of a single anti-join.
+	//    Stable iteration order keeps EXPLAIN output deterministic across runs.
+	struct GroupKey {
+		vector<string> sorted_columns;
+		bool operator==(const GroupKey &o) const {
+			return sorted_columns == o.sorted_columns;
+		}
+	};
+	struct GroupKeyHasher {
+		size_t operator()(const GroupKey &k) const {
+			size_t h = 0;
+			for (auto &c : k.sorted_columns) {
+				h ^= std::hash<string>()(c) + 0x9e3779b9 + (h << 6) + (h >> 2);
+			}
+			return h;
+		}
+	};
+	struct GroupedEqualityDeletes {
+		vector<string> equality_column_names; // original (non-sorted) column order from equality_ids
+		vector<pair<string, int64_t>> files;  // (file_path, sequence_number)
+	};
+	vector<GroupedEqualityDeletes> groups;
+	unordered_map<GroupKey, idx_t, GroupKeyHasher> group_indices;
+	for (auto &eq : equality_files) {
+		GroupKey key;
+		key.sorted_columns = eq.equality_column_names;
+		std::sort(key.sorted_columns.begin(), key.sorted_columns.end());
+		auto it = group_indices.find(key);
+		if (it == group_indices.end()) {
+			GroupedEqualityDeletes group;
+			group.equality_column_names = eq.equality_column_names;
+			group.files.emplace_back(eq.file_path, eq.sequence_number);
+			group_indices[key] = groups.size();
+			groups.push_back(std::move(group));
+		} else {
+			groups[it->second].files.emplace_back(eq.file_path, eq.sequence_number);
+		}
+	}
+
+	// 3. Build the data-side TableFunctionRef. iceberg_scan(<original positional args>, <named params>,
 	//    __internal_skip_equality_deletes=true).
 	const string data_alias = "__iceberg_data_scan";
-	{
-		named_parameter_map_t extra;
-		extra["__internal_skip_equality_deletes"] = Value::BOOLEAN(true);
-		auto data_children = BuildIcebergScanChildren(input.inputs, input.named_parameters, extra);
-		auto data_func = make_uniq<FunctionExpression>("iceberg_scan", std::move(data_children));
-		auto data_ref = make_uniq<TableFunctionRef>();
-		data_ref->function = std::move(data_func);
-		data_ref->alias = data_alias;
+	named_parameter_map_t extra;
+	extra["__internal_skip_equality_deletes"] = Value::BOOLEAN(true);
+	auto data_children = BuildIcebergScanChildren(input.inputs, input.named_parameters, extra);
+	auto data_func = make_uniq<FunctionExpression>("iceberg_scan", std::move(data_children));
+	auto data_ref = make_uniq<TableFunctionRef>();
+	data_ref->function = std::move(data_func);
+	data_ref->alias = data_alias;
 
-		unique_ptr<TableRef> root = std::move(data_ref);
+	unique_ptr<TableRef> root = std::move(data_ref);
 
-		// 3. For each equality delete file, build a SubqueryRef around parquet_scan and chain an
-		//    anti-join above the running root.
-		for (idx_t i = 0; i < equality_files.size(); i++) {
-			auto &eq = equality_files[i];
-			string delete_alias = "__iceberg_eq_del_" + std::to_string(i);
-			auto delete_ref = BuildEqualityDeleteSubquery(eq.file_path, eq.sequence_number, delete_alias);
-			auto cond = BuildEqualityDeleteJoinCondition(data_alias, delete_alias, eq.equality_column_names);
+	// 4. One anti-join per group. The right side is a single SubqueryRef whose body is a UNION ALL
+	//    of every delete file in the group (each contributing its sequence number as a constant).
+	for (idx_t i = 0; i < groups.size(); i++) {
+		auto &group = groups[i];
+		string delete_alias = "__iceberg_eq_del_group_" + std::to_string(i);
+		auto delete_ref = BuildEqualityDeleteGroupSubquery(group.files, delete_alias);
+		auto cond = BuildEqualityDeleteJoinCondition(data_alias, delete_alias, group.equality_column_names);
 
-			auto join_ref = make_uniq<JoinRef>(JoinRefType::REGULAR);
-			join_ref->type = JoinType::ANTI;
-			join_ref->left = std::move(root);
-			join_ref->right = std::move(delete_ref);
-			join_ref->condition = std::move(cond);
-			root = std::move(join_ref);
-		}
-		return root;
+		auto join_ref = make_uniq<JoinRef>(JoinRefType::REGULAR);
+		join_ref->type = JoinType::ANTI;
+		join_ref->left = std::move(root);
+		join_ref->right = std::move(delete_ref);
+		join_ref->condition = std::move(cond);
+		root = std::move(join_ref);
 	}
+	return root;
 }
 
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
