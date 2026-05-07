@@ -65,16 +65,39 @@ BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
 	return BindInfo(*file_list.table);
 }
 
-//! FIXME: needs v1.5.1, causes a crash on v1.5.0
-// static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
-//	// Don't push down filters on the _row_id virtual column
-//	if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
-//		return false;
-//	}
-
-//	// Default behavior for other columns
-//	return true;
-//}
+//! Refuse filter pushdown on columns that are also referenced by an equality-delete file.
+//!
+//! Why: when filter pushdown converts `WHERE id = X` into a TableFilter on `id`, the column-pruning
+//! optimizer drops `id` from `LogicalGet.projection_ids` (only the TableFilter references it now,
+//! not the projection). The runtime equality-delete machinery in `IcebergMultiFileReader::Finalize-
+//! Chunk` evaluates `(id != value) OR ...` on the projected `output_chunk`, where `id` is no
+//! longer materialized — crash. By refusing pushdown for these columns we keep the predicate as a
+//! `LogicalFilter` above the LogicalGet, which keeps `id` in `projection_ids` and therefore in
+//! `output_chunk`. The trade-off is losing parquet-side row-group/page filtering for those filters,
+//! which is fine for the typical case (low cardinality of equality-delete columns).
+static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
+	auto &bind_data = bind_data_p.Cast<MultiFileBindData>();
+	if (!bind_data.file_list) {
+		return true;
+	}
+	auto iceberg_list = dynamic_cast<IcebergMultiFileList *>(bind_data.file_list.get());
+	if (!iceberg_list) {
+		return true;
+	}
+	auto &equality_field_ids = iceberg_list->GetEqualityDeleteFieldIds();
+	if (equality_field_ids.empty()) {
+		return true;
+	}
+	// column_id is the position in the LogicalGet's `returned_types`/`returned_names`, which is
+	// iceberg-schema order. Map it to a field_id and check membership.
+	auto &iceberg_schema = iceberg_list->GetSchema().columns;
+	if (column_id >= iceberg_schema.size()) {
+		// Virtual columns (filename, _row_id, …) live above the regular schema; pushdown is fine.
+		return true;
+	}
+	auto field_id = iceberg_schema[column_id]->id;
+	return equality_field_ids.count(field_id) == 0;
+}
 
 TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loader) {
 	// The iceberg_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
@@ -98,7 +121,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.get_bind_info = IcebergBindInfo;
 		function.get_virtual_columns = IcebergVirtualColumns;
 		function.get_partition_stats = IcebergMultiFileReader::IcebergGetPartitionStats;
-		// function.supports_pushdown_type = IcebergScanSupportsPushdownType;
+		function.supports_pushdown_type = IcebergScanSupportsPushdownType;
 
 		// Schema param is just confusing here
 		function.named_parameters.erase("schema");
