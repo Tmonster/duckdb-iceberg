@@ -1098,6 +1098,35 @@ void IcebergMultiFileList::ProcessDeletes(const vector<MultiFileColumnDefinition
 	D_ASSERT(FinishedScanningDeletes());
 }
 
+const unordered_set<int32_t> &IcebergMultiFileList::GetEqualityDeleteFieldIds() const {
+	lock_guard<mutex> guard(delete_lock);
+	if (equality_delete_field_ids_cached) {
+		return cached_equality_delete_field_ids;
+	}
+
+	// Drain the delete-manifest reader so every manifest's manifest_entries are populated.
+	// This only reads Avro metadata — no delete file contents are opened here.
+	while (!FinishedScanningDeletes()) {
+		delete_manifest_reader->Read();
+	}
+
+	for (auto &manifest : delete_manifests) {
+		for (auto &entry : manifest.entry.manifest_entries) {
+			if (entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			if (entry.data_file.content != IcebergManifestEntryContentType::EQUALITY_DELETES) {
+				continue;
+			}
+			for (auto fid : entry.data_file.equality_ids) {
+				cached_equality_delete_field_ids.insert(fid);
+			}
+		}
+	}
+	equality_delete_field_ids_cached = true;
+	return cached_equality_delete_field_ids;
+}
+
 void IcebergMultiFileList::ScanDeleteFile(const BoundIcebergManifestEntry &bound_manifest_entry,
                                           const vector<MultiFileColumnDefinition> &global_columns,
                                           const vector<ColumnIndex> &column_indexes) const {

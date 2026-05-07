@@ -291,6 +291,65 @@ ReaderInitializeType IcebergMultiFileReader::InitializeReader(MultiFileReaderDat
 	//! Get the data file that we're preparing to scan
 	const auto &multi_file_list = gstate.file_list.Cast<IcebergMultiFileList>();
 
+	//! Equality-delete columns must appear in the user's projection. See equality_id deletes
+	{
+		auto &equality_field_ids = multi_file_list.GetEqualityDeleteFieldIds();
+		if (!equality_field_ids.empty()) {
+			unordered_set<int32_t> projected_field_ids;
+			auto record_projected = [&](idx_t col_ids_idx) {
+				if (col_ids_idx >= global_column_ids.size()) {
+					return;
+				}
+				auto &col = global_column_ids[col_ids_idx];
+				if (col.IsVirtualColumn()) {
+					return;
+				}
+				auto pos = col.GetPrimaryIndex();
+				if (pos >= global_columns.size()) {
+					return;
+				}
+				if (global_columns[pos].identifier.IsNull()) {
+					return;
+				}
+				projected_field_ids.insert(global_columns[pos].identifier.GetValue<int32_t>());
+			};
+			if (!gstate.projection_ids.empty()) {
+				for (auto idx : gstate.projection_ids) {
+					record_projected(idx);
+				}
+			} else {
+				for (idx_t i = 0; i < global_column_ids.size(); i++) {
+					record_projected(i);
+				}
+			}
+
+			string missing;
+			auto &iceberg_schema = multi_file_list.GetSchema().columns;
+			for (auto fid : equality_field_ids) {
+				if (projected_field_ids.count(fid)) {
+					continue;
+				}
+				for (auto &col : iceberg_schema) {
+					if (col->id == fid) {
+						if (!missing.empty()) {
+							missing += ", ";
+						}
+						missing += "\"" + col->name + "\"";
+						break;
+					}
+				}
+			}
+			if (!missing.empty()) {
+				throw InvalidInputException(
+				    "iceberg_scan: this snapshot has equality-delete files keyed on column(s) %s, "
+				    "which the query does not select. Equality deletes are evaluated against the "
+				    "scan's projected output, so these columns must appear in the SELECT list (or "
+				    "use SELECT *) for the read to be correct.",
+				    missing);
+			}
+		}
+	}
+
 	//! Add the columns needed by the equality deletes if not present
 	auto new_global_column_ids = global_column_ids;
 	auto &equality_to_result_id = multi_file_list.equality_id_to_result_id;

@@ -74,6 +74,11 @@ public:
 	unique_ptr<DeleteFilter> GetPositionalDeletesForFile(const string &file_path) const;
 	void ProcessDeletes(const vector<MultiFileColumnDefinition> &global_columns,
 	                    const vector<ColumnIndex> &column_indexes) const;
+	//! Returns the union of equality_ids field IDs across every equality-delete file in this
+	//! snapshot. Reads delete-manifest Avro metadata if not already cached. Does NOT open delete
+	//! file contents. Used at scan-init to validate that the user's projection includes every
+	//! column referenced by an equality-delete file.
+	const unordered_set<int32_t> &GetEqualityDeleteFieldIds() const;
 	vector<reference<const IcebergEqualityDeleteRow>>
 	GetEqualityDeletesForFile(const BoundIcebergManifestEntry &manifest_entry) const;
 	void GetStatistics(vector<PartitionStatistics> &result) const;
@@ -145,6 +150,9 @@ public:
 	//! The columns needed by the equality deletes that aren't referenced by the scan
 	mutable unordered_map<int32_t, column_t> equality_id_to_result_id;
 	mutable idx_t transaction_delete_idx = 0;
+	//! Cache for GetEqualityDeleteFieldIds — populated lazily on first call.
+	mutable bool equality_delete_field_ids_cached = false;
+	mutable unordered_set<int32_t> cached_equality_delete_field_ids;
 
 	mutable bool initialized = false;
 	const IcebergOptions &options;
