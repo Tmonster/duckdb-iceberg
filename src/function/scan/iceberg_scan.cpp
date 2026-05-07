@@ -24,6 +24,7 @@
 
 #include "common/iceberg_utils.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
+#include "planning/snapshot/iceberg_scan_info.hpp"
 #include "function/iceberg_functions.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 
@@ -182,6 +183,23 @@ static unique_ptr<TableRef> IcebergScanBindReplace(ClientContext &context, Table
 		}
 	}
 
+	// Resolve the storage location. Parser-level calls (`iceberg_scan('/path', ...)`) supply it as
+	// the first positional argument. Catalog-table binds (the patched bind_basetableref path) pass
+	// no positional inputs but stash an IcebergScanInfo on function_info — pull metadata.location
+	// from there so we can refer to the table when constructing the data-side TableFunctionRef.
+	// Needs patched duckdb/duckdb branch located at  tmonster/duckdb/bind_replace_in_bind_base_table_ref
+	vector<Value> resolved_inputs = input.inputs;
+	if (resolved_inputs.empty()) {
+		if (!input.info) {
+			return nullptr;
+		}
+		auto iceberg_info_ptr = dynamic_cast<const IcebergScanInfo *>(input.info.get());
+		if (!iceberg_info_ptr) {
+			return nullptr;
+		}
+		resolved_inputs.push_back(Value(iceberg_info_ptr->metadata.location));
+	}
+
 	// 1. Pre-bind iceberg_scan once to discover the snapshot's equality delete files. We pass
 	//    __internal_skip_equality_deletes=true so that on the eventual recursive bind the data side
 	//    won't re-apply equality deletes via FinalizeChunk.
@@ -190,7 +208,7 @@ static unique_ptr<TableRef> IcebergScanBindReplace(ClientContext &context, Table
 
 	vector<LogicalType> probe_return_types;
 	vector<string> probe_return_names;
-	TableFunctionBindInput probe_bind_input(input.inputs, data_named_params, input.input_table_types,
+	TableFunctionBindInput probe_bind_input(resolved_inputs, data_named_params, input.input_table_types,
 	                                        input.input_table_names, input.info, input.binder, input.table_function,
 	                                        input.ref);
 	auto probe_bind_data = input.table_function.bind(context, probe_bind_input, probe_return_types, probe_return_names);
@@ -289,12 +307,12 @@ static unique_ptr<TableRef> IcebergScanBindReplace(ClientContext &context, Table
 		}
 	}
 
-	// 3. Build the data-side TableFunctionRef. iceberg_scan(<original positional args>, <named params>,
+	// 3. Build the data-side TableFunctionRef. iceberg_scan(<resolved positional args>, <named params>,
 	//    __internal_skip_equality_deletes=true).
 	const string data_alias = "__iceberg_data_scan";
 	named_parameter_map_t extra;
 	extra["__internal_skip_equality_deletes"] = Value::BOOLEAN(true);
-	auto data_children = BuildIcebergScanChildren(input.inputs, input.named_parameters, extra);
+	auto data_children = BuildIcebergScanChildren(resolved_inputs, input.named_parameters, extra);
 	auto data_func = make_uniq<FunctionExpression>("iceberg_scan", std::move(data_children));
 	auto data_ref = make_uniq<TableFunctionRef>();
 	data_ref->function = std::move(data_func);
