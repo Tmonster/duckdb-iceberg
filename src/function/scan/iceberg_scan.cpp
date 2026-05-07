@@ -65,16 +65,6 @@ BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
 	return BindInfo(*file_list.table);
 }
 
-//! Refuse filter pushdown on columns that are also referenced by an equality-delete file.
-//!
-//! Why: when filter pushdown converts `WHERE id = X` into a TableFilter on `id`, the column-pruning
-//! optimizer drops `id` from `LogicalGet.projection_ids` (only the TableFilter references it now,
-//! not the projection). The runtime equality-delete machinery in `IcebergMultiFileReader::Finalize-
-//! Chunk` evaluates `(id != value) OR ...` on the projected `output_chunk`, where `id` is no
-//! longer materialized — crash. By refusing pushdown for these columns we keep the predicate as a
-//! `LogicalFilter` above the LogicalGet, which keeps `id` in `projection_ids` and therefore in
-//! `output_chunk`. The trade-off is losing parquet-side row-group/page filtering for those filters,
-//! which is fine for the typical case (low cardinality of equality-delete columns).
 static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
 	auto &bind_data = bind_data_p.Cast<MultiFileBindData>();
 	if (!bind_data.file_list) {
