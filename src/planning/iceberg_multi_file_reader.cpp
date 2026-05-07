@@ -327,10 +327,11 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 		// The path of the data file where this chunk was read from
 		const auto &file_path = data_file.file_path;
 		lock_guard<mutex> delete_guard(multi_file_list.delete_lock);
-		if (!multi_file_list.FinishedScanningDeletes() ||
-		    multi_file_list.transaction_delete_idx < multi_file_list.transaction_delete_manifests.size()) {
-			multi_file_list.ProcessDeletes(global_columns, global_column_ids);
-		}
+		// ProcessDeletes is now idempotent (uses delete_scan_watermark internally). The optimizer
+		// extension may have already advanced delete_manifest_reader at plan-rewrite time, leaving
+		// FinishedScanningDeletes() == true with no file contents scanned yet. Always call it; it
+		// scans only entries past the watermark.
+		multi_file_list.ProcessDeletes(global_columns, global_column_ids);
 		reader.deletion_filter = multi_file_list.GetPositionalDeletesForFile(file_path);
 	}
 
@@ -346,7 +347,8 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 	ApplyPartitionConstants(multi_file_list, reader_data, global_columns, global_column_ids);
 }
 
-void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,
+void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataChunk &input_chunk,
+                                                  DataChunk &output_chunk,
                                                   const IcebergMultiFileList &multi_file_list,
                                                   const BoundIcebergManifestEntry &bound_manifest_entry,
                                                   const vector<MultiFileColumnDefinition> &local_columns) {
@@ -425,6 +427,16 @@ void IcebergMultiFileReader::ApplyEqualityDeletes(ClientContext &context, DataCh
 		equality_delete_filter = std::move(conjunction_and);
 	}
 
+	fprintf(stderr, "[DEBUG] ApplyEqualityDeletes: input_chunk types=[");
+	for (idx_t i = 0; i < input_chunk.ColumnCount(); i++) {
+		fprintf(stderr, "%s%s", i ? "," : "", input_chunk.data[i].GetType().ToString().c_str());
+	}
+	fprintf(stderr, "] output_chunk types=[");
+	for (idx_t i = 0; i < output_chunk.ColumnCount(); i++) {
+		fprintf(stderr, "%s%s", i ? "," : "", output_chunk.data[i].GetType().ToString().c_str());
+	}
+	fprintf(stderr, "] filter=%s\n", equality_delete_filter->ToString().c_str());
+
 	//! Apply equality deletes
 	ExpressionExecutor expression_executor(context);
 	expression_executor.AddExpression(*equality_delete_filter);
@@ -462,7 +474,7 @@ void IcebergMultiFileReader::FinalizeChunk(ClientContext &context, const MultiFi
 	auto &bound_manifest_entry = multi_file_list.GetManifestEntry(file_id);
 
 	auto &local_columns = reader.columns;
-	ApplyEqualityDeletes(context, output_chunk, multi_file_list, bound_manifest_entry, local_columns);
+	ApplyEqualityDeletes(context, input_chunk, output_chunk, multi_file_list, bound_manifest_entry, local_columns);
 
 	//! Remove the extra columns we added to perform the equality delete filtering
 	for (idx_t i = 0; i < diff; i++) {
