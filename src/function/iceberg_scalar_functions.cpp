@@ -312,6 +312,29 @@ static unique_ptr<FunctionData> IcebergTruncateDecimalBind(ClientContext &contex
 	return nullptr;
 }
 
+//===--------------------------------------------------------------------===//
+// verify_equality_delete_columns(col1, col2, ...) -> BOOLEAN
+// A no-op variadic marker function that always returns true. The iceberg
+// pre-optimizer wraps iceberg_scan LogicalGets in a LogicalFilter calling
+// this function on every column an equality-delete file references, so the
+// built-in optimizer's column-pruning passes treat those columns as live.
+//===--------------------------------------------------------------------===//
+
+static void VerifyEqualityDeleteColumnsFunction(DataChunk &input, ExpressionState &state, Vector &result) {
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	ConstantVector::SetNull(result, false);
+	ConstantVector::GetData<bool>(result)[0] = true;
+}
+
+ScalarFunctionSet IcebergFunctions::GetVerifyEqualityDeleteColumnsFunction() {
+	ScalarFunctionSet set("verify_equality_delete_columns");
+	ScalarFunction fun({}, LogicalType::BOOLEAN, VerifyEqualityDeleteColumnsFunction);
+	fun.varargs = LogicalType::ANY;
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction(fun);
+	return set;
+}
+
 ScalarFunctionSet IcebergFunctions::GetIcebergTruncateFunction() {
 	ScalarFunctionSet set("iceberg_truncate");
 	// (width, value) -> same type as value

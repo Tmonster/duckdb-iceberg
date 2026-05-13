@@ -65,7 +65,7 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 	}
 	auto &deletes = *it->second;
 
-	//! Map from column_id to 'global_columns' index, so we can create a reference to the correct global index
+	//! Map from column_id to 'global_columns' index, so we can resolve field-ids to schema positions.
 	unordered_map<int32_t, column_t> id_to_global_column;
 	for (column_t i = 0; i < global_columns.size(); i++) {
 		auto &col = global_columns[i];
@@ -73,28 +73,6 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 		id_to_global_column[col.identifier.GetValue<int32_t>()] = i;
 	}
 
-	unordered_map<idx_t, idx_t> global_id_to_result_id;
-	for (idx_t i = 0; i < column_indexes.size(); i++) {
-		auto &column_index = column_indexes[i];
-		if (column_index.IsVirtualColumn()) {
-			continue;
-		}
-		auto global_id = column_index.GetPrimaryIndex();
-		global_id_to_result_id[global_id] = i;
-	}
-	//! For the column(s) that are needed but aren't referenced, add them to the map
-	for (auto field_id : data_file.equality_ids) {
-		auto global_column_id = id_to_global_column[field_id];
-		ColumnIndex equality_index(global_column_id);
-		//! Check if the column needed by the equality delete is present
-		if (std::find(column_indexes.begin(), column_indexes.end(), equality_index) != column_indexes.end()) {
-			continue;
-		}
-		auto new_result_id = column_indexes.size() + equality_id_to_result_id.size();
-		//! Create or get the result id mapping for this equality id
-		auto result_id = equality_id_to_result_id.emplace(field_id, new_result_id).first->second;
-		global_id_to_result_id[global_column_id] = result_id;
-	}
 	deletes.files.emplace_back(data_file.partition_info, manifest_file.partition_spec_id);
 	auto &rows = deletes.files.back().rows;
 	rows.resize(count);
@@ -105,9 +83,32 @@ void IcebergMultiFileList::ScanEqualityDeleteFile(const BoundIcebergManifestEntr
 		auto &col = global_columns[global_column_id];
 		auto &vec = result.data[col_idx];
 
-		auto it = global_id_to_result_id.find(global_column_id);
-		D_ASSERT(it != global_id_to_result_id.end());
-		auto result_column_id = it->second;
+		// The iceberg pre-optimizer wraps every iceberg_scan in a LogicalFilter that
+		// references every equality-delete column, so the column is guaranteed to live
+		// in `column_indexes`. ApplyEqualityDeletes runs the predicate against
+		// `input_chunk`, which is the file reader's local chunk — it contains only the
+		// non-virtual entries of `column_indexes` in their original order. So the
+		// BoundReferenceExpression index is the PHYSICAL position (column_indexes
+		// position minus the number of preceding virtual columns).
+		ColumnIndex equality_index(global_column_id);
+		idx_t result_column_id = DConstants::INVALID_INDEX;
+		idx_t physical_pos = 0;
+		for (idx_t i = 0; i < column_indexes.size(); i++) {
+			if (column_indexes[i].IsVirtualColumn()) {
+				continue;
+			}
+			if (column_indexes[i] == equality_index) {
+				result_column_id = physical_pos;
+				break;
+			}
+			physical_pos++;
+		}
+		if (result_column_id == DConstants::INVALID_INDEX) {
+			throw InternalException(
+			    "ScanEqualityDeleteFile: required equality-delete column (field_id=%d) is missing from "
+			    "the scan projection. The iceberg pre-optimizer should have ensured it was projected.",
+			    field_id);
+		}
 
 		for (idx_t i = 0; i < count; i++) {
 			auto &row = rows[i];

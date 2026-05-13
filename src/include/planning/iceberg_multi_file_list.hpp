@@ -146,8 +146,6 @@ public:
 	//! FIXME: this is only used in 'FinalizeBind',
 	//! shouldn't this be used to protect all the variable accesses that are accessed there while the lock is held?
 	mutable mutex delete_lock;
-	//! The columns needed by the equality deletes that aren't referenced by the scan
-	mutable unordered_map<int32_t, column_t> equality_id_to_result_id;
 	mutable idx_t transaction_delete_idx = 0;
 	//! Set once committed delete-manifest entries have been bound and pushed to delete_manifest_entries.
 	mutable bool committed_delete_entries_enumerated = false;
