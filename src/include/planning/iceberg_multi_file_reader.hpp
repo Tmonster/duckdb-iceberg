@@ -65,7 +65,11 @@ public:
 	void FinalizeChunk(ClientContext &context, const MultiFileBindData &bind_data, BaseFileReader &reader,
 	                   const MultiFileReaderData &reader_data, DataChunk &input_chunk, DataChunk &output_chunk,
 	                   ExpressionExecutor &executor, optional_ptr<MultiFileReaderGlobalState> global_state) override;
-	void ApplyEqualityDeletes(ClientContext &context, DataChunk &output_chunk,
+	//! Filter is evaluated against input_chunk (which has every column the scan read, including
+	//! equality-delete columns the optimizer extension keeps alive). The selection vector is then
+	//! applied to output_chunk so user-projected output is filtered consistently. input_chunk and
+	//! output_chunk always have the same row count.
+	void ApplyEqualityDeletes(ClientContext &context, DataChunk &input_chunk, DataChunk &output_chunk,
 	                          const IcebergMultiFileList &multi_file_list,
 	                          const BoundIcebergManifestEntry &manifest_entry,
 	                          const vector<MultiFileColumnDefinition> &local_columns);
