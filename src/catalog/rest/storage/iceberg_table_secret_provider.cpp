@@ -74,6 +74,10 @@ static CreateSecretInput RevendVendedCredentials(ClientContext &context, CreateS
 	auto table_info = IcebergTableInformation(ic_catalog, iceberg_schema, table_name);
 	// auto table_info = table_entry->second;
 
+	//! The catalog credentials used to sign the re-vend request may have expired alongside the table
+	//! credentials; refresh them first so the GetTable request below can authenticate.
+	ic_catalog.auth_handler->RefreshCatalogCredentialsIfNeeded(context);
+
 	//! Force a fresh request to the catalog (bypassing the metadata cache) so we obtain newly vended
 	//! credentials, then refresh the table's config/storage-credentials in place.
 	auto get_table_result = IRCAPI::GetTable(context, ic_catalog, iceberg_schema, table_name);

@@ -2,13 +2,19 @@
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/main/setting_info.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/common/types/value.hpp"
 
 #include "catalog/rest/api/api_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/storage/authorization/sigv4_utils.hpp"
+#include "iceberg_logging.hpp"
+
+#include <chrono>
+#include <limits>
 
 namespace duckdb {
 
@@ -49,6 +55,11 @@ unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(AttachedD
 			result->sigv4_service = entry.second.ToString();
 		} else if (lower_name == "sigv4_region") {
 			result->sigv4_region = entry.second.ToString();
+		} else if (lower_name == "sigv4_credential_refresh_seconds") {
+			result->credential_refresh_seconds = entry.second.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>();
+			if (result->credential_refresh_seconds < 0) {
+				throw InvalidInputException("'sigv4_credential_refresh_seconds' must be a non-negative integer");
+			}
 		} else if (lower_name == "extra_http_headers") {
 			// Parse extra_http_headers if provided directly in attach options
 			IcebergAuthorization::ParseExtraHttpHeaders(entry.second, result->extra_http_headers);
@@ -116,9 +127,114 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	return aws_input;
 }
 
+bool SIGV4Authorization::RefreshStorageSecretUnlocked(ClientContext &context) {
+	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
+	if (!secret_entry || !secret_entry->secret) {
+		return false;
+	}
+	auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+
+	Value refresh_info;
+	if (!kv_secret.TryGetValue("refresh_info", refresh_info) || refresh_info.IsNull()) {
+		// The secret carries static credentials (no 'refresh_info'); there is nothing to re-vend.
+		return false;
+	}
+
+	// Reconstruct the create-secret call from the secret + its 'refresh_info', mirroring httpfs'
+	// GenerateRefreshSecretInfo. Dispatch is by provider, so this re-runs whatever created the secret
+	// (e.g. the AWS credential_chain / STS provider) to obtain fresh credentials.
+	CreateSecretInput input;
+	input.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
+	input.persist_type = SecretPersistType::TEMPORARY;
+	input.type = kv_secret.GetType();
+	input.provider = kv_secret.GetProvider();
+	input.name = kv_secret.GetName();
+	input.scope = kv_secret.GetScope();
+	input.storage_type = secret_entry->storage_mode;
+
+	auto child_count = StructType::GetChildCount(refresh_info.type());
+	auto &children = StructValue::GetChildren(refresh_info);
+	for (idx_t i = 0; i < child_count; i++) {
+		input.options[StructType::GetChildName(refresh_info.type(), i)] = children[i];
+	}
+
+	try {
+		auto &secret_manager = SecretManager::Get(context);
+		secret_manager.CreateSecret(context, input);
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		DUCKDB_LOG_WARNING(context, "Failed to refresh SigV4 catalog credentials secret '%s': %s", secret,
+		                   error.RawMessage());
+		return false;
+	}
+	return true;
+}
+
+int64_t SIGV4Authorization::ComputeNextRefreshDeadlineUnlocked(ClientContext &context, int64_t now_seconds) {
+	// An explicit attach option takes precedence: refresh on a fixed interval.
+	if (credential_refresh_seconds > 0) {
+		return now_seconds + credential_refresh_seconds;
+	}
+
+	// Otherwise, if the credentials carry an expiry, refresh once 90% of the lifetime has elapsed.
+	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
+	if (secret_entry && secret_entry->secret) {
+		auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+		Value expires_at_val;
+		if (kv_secret.TryGetValue("expires_at", expires_at_val) && !expires_at_val.IsNull()) {
+			Value casted;
+			string error;
+			// 'expires_at' is epoch milliseconds (e.g. from s3.session-token-expires-at-ms).
+			if (expires_at_val.DefaultTryCastAs(LogicalType::BIGINT, casted, &error)) {
+				int64_t expires_at_seconds = casted.GetValue<int64_t>() / 1000;
+				int64_t remaining = expires_at_seconds - now_seconds;
+				if (remaining <= 0) {
+					return now_seconds; // already expired -> refresh now
+				}
+				return now_seconds + static_cast<int64_t>(0.9 * static_cast<double>(remaining));
+			}
+		}
+	}
+
+	// No refresh signal available (no attach option and no expiry on the secret): never proactively refresh.
+	return std::numeric_limits<int64_t>::max();
+}
+
+void SIGV4Authorization::RefreshCatalogCredentialsIfNeeded(ClientContext &context) {
+	std::lock_guard<std::mutex> lock(credential_mutex);
+
+	auto now = std::chrono::system_clock::now();
+	int64_t now_seconds = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+
+	if (credentials_refresh_at == 0) {
+		// First request: establish the refresh deadline from the current credentials, without
+		// refreshing (they are assumed valid at attach time).
+		credentials_refresh_at = ComputeNextRefreshDeadlineUnlocked(context, now_seconds);
+	}
+
+	if (now_seconds < credentials_refresh_at) {
+		return; // credentials are still considered fresh
+	}
+
+	// Credentials are stale: re-vend the secret, then recompute the deadline from the new state.
+	bool refreshed = RefreshStorageSecretUnlocked(context);
+	now = std::chrono::system_clock::now();
+	now_seconds = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+	if (refreshed) {
+		DUCKDB_LOG_INFO(context, "Refreshed SigV4 catalog credentials for secret '%s'", secret);
+		credentials_refresh_at = ComputeNextRefreshDeadlineUnlocked(context, now_seconds);
+	} else {
+		// Refresh unavailable or failed: back off so we don't retry on every request.
+		credentials_refresh_at = now_seconds + CREDENTIAL_REFRESH_BACKOFF_SECONDS;
+	}
+}
+
 unique_ptr<HTTPResponse> SIGV4Authorization::Request(RequestType request_type, ClientContext &context,
                                                      const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
                                                      const string &data) {
+	// Proactively refresh the catalog credentials before signing if they are considered stale.
+	RefreshCatalogCredentialsIfNeeded(context);
+
 	// Note: For SIGV4, custom headers should be added BEFORE signing so they're included in the signature
 	// Merge extra HTTP headers first
 	for (auto &entry : extra_http_headers) {

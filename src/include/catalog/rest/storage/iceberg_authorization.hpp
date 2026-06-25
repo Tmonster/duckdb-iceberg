@@ -70,6 +70,13 @@ public:
 	                                         const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                         const string &data = "") = 0;
 
+	//! Proactively refresh the credentials used to authenticate with the catalog if they are stale.
+	//! Called by Request() before each catalog call, and explicitly when re-vending table credentials
+	//! (the catalog credentials that sign the re-vend request may have expired too). Default no-op;
+	//! SigV4 overrides this to re-vend its STS credentials secret.
+	virtual void RefreshCatalogCredentialsIfNeeded(ClientContext &context) {
+	}
+
 public:
 	template <class TARGET>
 	TARGET &Cast() {
