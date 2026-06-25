@@ -19,6 +19,7 @@
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/storage/authorization/none.hpp"
 #include "catalog/rest/storage/authorization/sigv4_utils.hpp"
+#include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
 #include "core/expression/iceberg_transform.hpp"
 #include "duckdb/parser/column_definition.hpp"
 
@@ -71,10 +72,14 @@ static void ParseS3ConfigOptions(const case_insensitive_map_t<string> &config, c
 	                                                                {"s3.region", "region"},
 	                                                                {"region", "region"},
 	                                                                {"client.region", "region"},
-	                                                                {"s3.endpoint", "endpoint"}};
+	                                                                {"s3.endpoint", "endpoint"},
+	                                                                {"s3.session-token-expires-at-ms", "expires_at"}};
 
 	for (auto &entry : config) {
 		auto it = config_to_option.find(entry.first);
+		if (entry.first == "s3.session-token-expires-at-ms") {
+			auto break_here = 0;
+		}
 		if (it != config_to_option.end()) {
 			options[it->second] = entry.second;
 		}
@@ -200,6 +205,10 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	const auto &table_location = table_metadata.GetLocation();
 	string storage_type = DetectStorageType(table_location);
 
+	//! Setup credential refreshing for tables
+	Value refresh_info;
+	refresh_info = IcebergTableSecretProvider::MakeRefreshInfo(catalog.GetName(), schema.name, name);
+
 	// Mapping from config key to a duckdb secret option
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
@@ -213,7 +222,7 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 	//! we can use the table_location instead.
 	const bool ignore_credential_prefix = storage_credentials.size() == 1;
 	for (idx_t index = 0; index < storage_credentials.size(); index++) {
-		auto &credential = storage_credentials[index];
+		auto &credential = storage_credentials[index]; /**/
 
 		//! Only use credentials whose prefix matches the storage type (e.g. "s3"),
 		//! matching Iceberg Java S3FileIO behavior: filter(c -> c.prefix().startsWith(ROOT_PREFIX))
@@ -239,12 +248,13 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 		create_secret_input.name = StringUtil::Format("%s_%d_%s", secret_base_name, index, credential.prefix);
 
 		create_secret_input.type = storage_type;
-		create_secret_input.provider = "config";
+		create_secret_input.provider = IcebergTableSecretProvider::PROVIDER;
 		create_secret_input.storage_type = "memory";
 		create_secret_input.options = config_options;
 
 		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
+		create_secret_input.options["refresh_info"] = refresh_info;
 		result.storage_credentials.push_back(create_secret_input);
 	}
 
@@ -257,9 +267,10 @@ IRCAPITableCredentials IcebergTableInformation::GetVendedCredentials(ClientConte
 
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		config.options = config_options;
+		config.options["refresh_info"] = refresh_info;
 		config.name = secret_base_name;
 		config.type = storage_type;
-		config.provider = "config";
+		config.provider = IcebergTableSecretProvider::PROVIDER;
 		config.storage_type = "memory";
 	}
 
