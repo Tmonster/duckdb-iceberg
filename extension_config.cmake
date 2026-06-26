@@ -39,3 +39,9 @@ if (NOT EMSCRIPTEN)
     )
   endif()
 endif()
+
+duckdb_extension_load(httpfs
+  GIT_URL https://github.com/Tmonster/duckdb-httpfs
+  GIT_TAG 92597127332174eb5ebf72946fe7a7e66a605dc9
+)
+
