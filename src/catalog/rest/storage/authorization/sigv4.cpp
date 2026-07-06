@@ -15,13 +15,13 @@ namespace duckdb {
 namespace {
 
 //! Detect the scheme from a host string, defaulting to HTTPS
-Aws::Http::Scheme DetectScheme(const string &host) {
-	auto lower = StringUtil::Lower(host);
-	if (StringUtil::StartsWith(lower, "http://")) {
-		return Aws::Http::Scheme::HTTP;
-	}
-	return Aws::Http::Scheme::HTTPS;
-}
+// Aws::Http::Scheme DetectScheme(const string &host) {
+// 	auto lower = StringUtil::Lower(host);
+// 	if (StringUtil::StartsWith(lower, "http://")) {
+// 		return Aws::Http::Scheme::HTTP;
+// 	}
+// 	return Aws::Http::Scheme::HTTPS;
+// }
 
 } // namespace
 
@@ -76,7 +76,6 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	}
 
 	auto host = endpoint_builder.GetHost();
-	aws_input.scheme = DetectScheme(host);
 	auto stripped_host = StripScheme(host);
 
 	// AWS service and region: use explicit overrides if provided, otherwise parse from host

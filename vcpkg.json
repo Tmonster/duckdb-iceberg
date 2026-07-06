@@ -7,16 +7,7 @@
 		"zlib",
 		"curl",
 		"openssl",
-		"roaring",
-		{
-			"name": "aws-sdk-cpp",
-			"features": [
-				"sso",
-				"sts",
-				"identity-management",
-				"rds"
-			]
-		}
+		"roaring"
 	],
 	"vcpkg-configuration": {
 		"overlay-ports": [
