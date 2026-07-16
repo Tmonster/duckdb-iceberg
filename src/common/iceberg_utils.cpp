@@ -2,10 +2,12 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/gzip_file_system.hpp"
+#include "duckdb/main/database_manager.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/main/extension_helper.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_information.hpp"
@@ -13,6 +15,28 @@
 #include "duckdb/catalog/catalog_entry_retriever.hpp"
 
 namespace duckdb {
+
+timestamp_ms_t IcebergUtils::GetTransactionStartTimeMS(ClientContext &context) {
+	auto &meta_transaction = MetaTransaction::Get(context);
+	auto transaction_start = meta_transaction.GetCurrentTransactionStartTimestamp();
+	return timestamp_ms_t(Timestamp::GetEpochMs(transaction_start));
+}
+
+idx_t IcebergUtils::ParseByteSizeOptionallyFormatted(const string &input) {
+	idx_t result;
+	auto error = StringUtil::TryParseFormattedBytes(input, result);
+	if (error.empty()) {
+		return result;
+	}
+
+	try {
+		auto parsed = std::stoll(input);
+		return parsed;
+	} catch (...) {
+		throw InvalidConfigurationException("Invalid format for 'write.target-file-size-bytes' (%s), error: %s", input,
+		                                    error);
+	}
+}
 
 CopyFunctionCatalogEntry &IcebergUtils::GetCopyFunction(ClientContext &context, const string &name) {
 	// Logic is partially duplicated from Catalog::AutoLoadExtensionByCatalogEntry(db, CatalogType::COPY_FUNCTION_ENTRY,
