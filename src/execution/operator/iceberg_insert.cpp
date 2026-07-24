@@ -3,16 +3,17 @@
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/execution/physical_operator_states.hpp"
+#include "duckdb/planner/expression_binder/table_function_binder.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
-#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -28,7 +29,9 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "core/expression/iceberg_transform.hpp"
+#include "storage/statistics/iceberg_variant_statistics.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
+#include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "iceberg_logging.hpp"
@@ -97,44 +100,6 @@ unique_ptr<GlobalSinkState> IcebergInsert::GetGlobalSinkState(ClientContext &con
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
-static IcebergColumnStats ParseColumnStats(const LogicalType &type, const vector<Value> &col_stats,
-                                           ClientContext &context) {
-	IcebergColumnStats column_stats(type);
-	for (idx_t stats_idx = 0; stats_idx < col_stats.size(); stats_idx++) {
-		auto &stats_children = StructValue::GetChildren(col_stats[stats_idx]);
-		auto &stats_name = StringValue::Get(stats_children[0]);
-		if (stats_name == "min") {
-			D_ASSERT(!column_stats.has_min);
-			column_stats.min = StringValue::Get(stats_children[1]);
-			column_stats.has_min = true;
-		} else if (stats_name == "max") {
-			D_ASSERT(!column_stats.has_max);
-			column_stats.max = StringValue::Get(stats_children[1]);
-			column_stats.has_max = true;
-		} else if (stats_name == "null_count") {
-			D_ASSERT(!column_stats.has_null_count);
-			column_stats.has_null_count = true;
-			column_stats.null_count = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
-		} else if (stats_name == "num_values") {
-			D_ASSERT(!column_stats.has_num_values);
-			column_stats.has_num_values = true;
-			column_stats.num_values = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
-		} else if (stats_name == "column_size_bytes") {
-			column_stats.has_column_size_bytes = true;
-			column_stats.column_size_bytes = StringUtil::ToUnsigned(StringValue::Get(stats_children[1]));
-		} else if (stats_name == "has_nan") {
-			column_stats.has_contains_nan = true;
-			column_stats.contains_nan = StringValue::Get(stats_children[1]) == "true";
-		} else if (stats_name == "variant_type") {
-			//! Should be handled elsewhere
-			continue;
-		} else {
-			// Ignore other stats types.s
-			DUCKDB_LOG_INFO(context, StringUtil::Format("Did not write column stats %s", stats_name));
-		}
-	}
-	return column_stats;
-}
 
 static bool IsMapType(string col_name, IcebergTableSchema &table_schema) {
 	for (auto &col : table_schema.columns) {
@@ -292,6 +257,10 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 
 		insert_count += data_file.record_count;
 
+		// variant columns emit one stats entry per shredded leaf - accumulate them per variant column
+		// (keyed by field id) and serialize the lower/upper bound variants once all entries are seen
+		unordered_map<int32_t, IcebergVariantBounds> variant_bounds;
+
 		for (idx_t col_idx = 0; col_idx < map_children.size(); col_idx++) {
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
@@ -309,11 +278,12 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				                        normalized_col_name);
 			}
 			if (name_offset.IsValid()) {
-				//! FIXME: deal with variant stats
+				// stats path descends into a variant column - buffer it for bounds serialization
+				variant_bounds[column_info_p->id].AddStatsEntry(column_names, name_offset.GetIndex(), col_stats);
 				continue;
 			}
 			auto &column_info = *column_info_p;
-			auto stats = ParseColumnStats(column_info.type, col_stats, context);
+			auto stats = IcebergColumnStats::ParseColumnStats(column_info.type, col_stats, context);
 
 			// a map type cannot violate not null constraints.
 			// Null value counts can be off since an empty map is the same as a null map.
@@ -342,6 +312,33 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 					data_file.upper_bounds[column_info.id] = serialized_value.GetValue();
 				}
 			}
+			// See Iceberg v3 (Appendix D) for geometry stats info
+			if (column_info.type.id() == LogicalTypeId::GEOMETRY && stats.has_bbox_xy) {
+				vector<double> lower {stats.bbox_xmin, stats.bbox_ymin};
+				vector<double> upper {stats.bbox_xmax, stats.bbox_ymax};
+				if (stats.has_bbox_z) {
+					lower.push_back(stats.bbox_zmin);
+					upper.push_back(stats.bbox_zmax);
+				} else if (stats.has_bbox_m) {
+					// Spark treats a 3-double bound as XYZ always, so for an
+					// XYM column we'd otherwise be misread as XYZ. Pad the Z slot with
+					// +infinity in both bounds so the encoding is unambiguously 4D and
+					// the M value lands in the right slot.
+					const auto z_max = GeometryExtent::UNKNOWN_MAX;
+					const auto z_min = GeometryExtent::UNKNOWN_MIN;
+					lower.push_back(z_min);
+					upper.push_back(z_max);
+				}
+				if (stats.has_bbox_m) {
+					lower.push_back(stats.bbox_mmin);
+					upper.push_back(stats.bbox_mmax);
+				}
+				const auto byte_count = lower.size() * sizeof(double);
+				data_file.lower_bounds[column_info.id] =
+				    Value::BLOB(const_data_ptr_cast<double>(lower.data()), byte_count);
+				data_file.upper_bounds[column_info.id] =
+				    Value::BLOB(const_data_ptr_cast<double>(upper.data()), byte_count);
+			}
 			if (stats.has_column_size_bytes) {
 				data_file.column_sizes[column_info.id] = stats.column_size_bytes;
 			}
@@ -355,6 +352,23 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		DUCKDB_LOG(context, IcebergLogType,
 		           "Iceberg INSERT, wrote data_file '%s', record_count=%lld, file_size=%lld bytes", data_file.file_path,
 		           data_file.record_count, data_file.file_size_in_bytes);
+
+		// serialize the accumulated variant bounds into the data file's lower/upper bounds
+		for (auto &entry : variant_bounds) {
+			bool has_lower = false;
+			bool has_upper = false;
+			string lower_blob;
+			string upper_blob;
+			if (!entry.second.Finalize(context, has_lower, lower_blob, has_upper, upper_blob)) {
+				continue;
+			}
+			if (has_lower) {
+				data_file.lower_bounds[entry.first] = Value::BLOB_RAW(lower_blob);
+			}
+			if (has_upper) {
+				data_file.upper_bounds[entry.first] = Value::BLOB_RAW(upper_blob);
+			}
+		}
 
 		written_files.push_back(std::move(manifest_entry));
 	}
@@ -825,9 +839,33 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 		result.write_empty_file = false;
 		// file_size_bytes is currently only supported for unpartitioned writes
 		auto write_target_file_size = table_properties.find("write.target-file-size-bytes");
+		bool target_file_size_set = false;
 		if (write_target_file_size != table_properties.end()) {
-			result.file_size_bytes = std::stoull(write_target_file_size->second);
-		} else {
+			try {
+				result.file_size_bytes = context.db->config.ParseMemoryLimit(write_target_file_size->second.c_str());
+				target_file_size_set = true;
+			} catch (ParserException &e) {
+				DUCKDB_LOG_INFO(context,
+				                "table property write.target-file-size-bytes = %s could not be parsed by "
+				                "ParseMemoryLimit(). Reason %s",
+				                write_target_file_size->second, e.what());
+			}
+			if (!target_file_size_set) {
+				try {
+					result.file_size_bytes = std::stoll(write_target_file_size->second);
+					target_file_size_set = true;
+				} catch (std::invalid_argument const &e) {
+					DUCKDB_LOG_INFO(
+					    context,
+					    "table property write.target-file-size-bytes = %s could not be parsed by std::stoll. Reason %s",
+					    write_target_file_size->second, e.what());
+				}
+			}
+			if (!target_file_size_set) {
+				throw InvalidInputException("Table property write.target-file-size-bytes is not a valid number");
+			}
+		}
+		if (!target_file_size_set) {
 			result.file_size_bytes = IcebergCatalog::DEFAULT_TARGET_FILE_SIZE;
 		}
 		result.rotate = true;
@@ -993,7 +1031,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 	return insert;
 }
 
-static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(BoundCreateTableInfo &info) {
+static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &context, BoundCreateTableInfo &info) {
 	auto metadata = make_uniq<IcebergTableMetadata>();
 	metadata->iceberg_version = 2;
 	metadata->default_spec_id = 0;
@@ -1014,6 +1052,18 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(BoundCreateTabl
 	metadata->AddSchemaOrGetExisting(schema);
 	metadata->SetCurrentSchemaId(0);
 
+	auto binder = Binder::CreateBinder(context);
+	TableFunctionBinder property_binder(*binder, context, "format-version");
+	for (auto &option : create_info.options) {
+		auto expr_copy = option.second->Copy();
+		auto bound_expr = property_binder.Bind(expr_copy);
+		if (bound_expr->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
+		auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
+		metadata->table_properties[option.first] = val.GetValue<string>();
+	}
+
 	// Build a placeholder partition spec from the parsed PARTITIONED BY clause so that
 	// PlanCopyForInsert appends the partition projection at plan time. The real spec is
 	// applied during PhysicalIcebergCreateTable::MakeCreateTableRequest, but the projection
@@ -1023,14 +1073,57 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(BoundCreateTabl
 	return metadata;
 }
 
+// CTAS stores columns using Iceberg storage types (e.g. HUGEINT -> DECIMAL(38,0)), which can differ from
+// the SELECT output. The write pipeline is typed with the storage types, so without a cast the append fails
+// with a type mismatch.
+static PhysicalOperator &CastCtasToIcebergStorageTypes(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                       PhysicalOperator &plan, BoundCreateTableInfo &info,
+                                                       const IcebergTableMetadata &metadata) {
+	auto &create_info = info.Base().Cast<CreateTableInfo>();
+	int32_t last_column_id = 0;
+	auto storage_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, metadata, create_info.columns,
+	                                                                     &create_info.constraints, last_column_id);
+	auto &src_types = plan.types;
+	D_ASSERT(src_types.size() == storage_schema->columns.size());
+
+	bool needs_cast = false;
+	vector<LogicalType> target_types;
+	target_types.reserve(src_types.size());
+	for (idx_t i = 0; i < src_types.size(); i++) {
+		auto &target = storage_schema->columns[i]->type;
+		if (target != src_types[i]) {
+			needs_cast = true;
+		}
+		target_types.push_back(target);
+	}
+	if (!needs_cast) {
+		return plan;
+	}
+
+	vector<unique_ptr<Expression>> expressions;
+	expressions.reserve(src_types.size());
+	for (idx_t i = 0; i < src_types.size(); i++) {
+		unique_ptr<Expression> expr = make_uniq<BoundReferenceExpression>(src_types[i], i);
+		if (target_types[i] != src_types[i]) {
+			expr = BoundCastExpression::AddCastToType(context, std::move(expr), target_types[i]);
+		}
+		expressions.push_back(std::move(expr));
+	}
+	auto &proj =
+	    planner.Make<PhysicalProjection>(std::move(target_types), std::move(expressions), plan.estimated_cardinality);
+	proj.children.push_back(plan);
+	return proj;
+}
+
 PhysicalOperator &IcebergCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                    LogicalCreateTable &op, PhysicalOperator &plan) {
+                                                    LogicalCreateTable &op, PhysicalOperator &plan_p) {
 	auto &schema = op.schema;
 	auto &ic_schema_entry = schema.Cast<IcebergSchemaEntry>();
 
 	// create a fake local iceberg table with desired columns
-	auto placeholder_metadata = BuildPlaceholderMetadata(*op.info);
+	auto placeholder_metadata = BuildPlaceholderMetadata(context, *op.info);
 	auto &placeholder_schema = placeholder_metadata->GetLatestSchema();
+	auto &plan = CastCtasToIcebergStorageTypes(context, planner, plan_p, *op.info, *placeholder_metadata);
 	IcebergCopyInput copy_input(context, *placeholder_metadata, placeholder_schema);
 	auto &physical_copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, &plan);
 	auto &physical_copy = physical_copy_op.Cast<PhysicalCopyToFile>();

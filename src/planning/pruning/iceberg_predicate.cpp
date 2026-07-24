@@ -1,9 +1,10 @@
 #include "planning/pruning/iceberg_predicate.hpp"
-
+#include "duckdb/common/printer.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
@@ -12,6 +13,7 @@
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/storage/statistics/geometry_stats.hpp"
 
 namespace duckdb {
 
@@ -106,6 +108,51 @@ static bool MatchBoundsConjunctionAndFilter(ClientContext &context, const Conjun
 	return true;
 }
 
+static bool IsDirectReference(const Expression &expr) {
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_REF:
+	case ExpressionClass::BOUND_COLUMN_REF:
+		return true;
+	default: {
+		return false;
+	}
+	}
+}
+
+static bool IsVariantExtract(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &variant_extract = expr.Cast<BoundFunctionExpression>();
+	if (variant_extract.function.name != "variant_extract") {
+		return false;
+	}
+	if (variant_extract.children.empty()) {
+		return false;
+	}
+	return true;
+}
+
+static bool IsVariantReference(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &variant_normalize_func = expr.Cast<BoundFunctionExpression>();
+	if (variant_normalize_func.function.name != "variant_normalize") {
+		return false;
+	}
+	if (variant_normalize_func.children.size() != 1) {
+		return false;
+	}
+
+	reference<const Expression> current_expr(*variant_normalize_func.children[0]);
+	while (IsVariantExtract(current_expr)) {
+		auto &func = current_expr.get().Cast<BoundFunctionExpression>();
+		current_expr = *func.children[0];
+	}
+	return IsDirectReference(current_expr);
+}
+
 template <class TRANSFORM>
 bool MatchTransformedBounds(ClientContext &context, ExpressionType comparison_type, const Expression &left,
                             const Expression &right, const IcebergPredicateStats &stats,
@@ -183,9 +230,58 @@ bool MatchBoundsTemplated(ClientContext &context, const TableFilter &filter, con
 		//!
 		//! See duckdb/duckdb-iceberg#464
 		auto &expression_filter = filter.Cast<ExpressionFilter>();
+
+		//! Spatial predicates on a geometry column (e.g. ST_Intersects, which the spatial
+		//! optimizer rewrites into a `geom && <const>` / st_intersects_extent bbox pre-filter)
+		//! arrive here as an ExpressionFilter. Delegate to GeometryStats::CheckZonemap, which
+		//! whitelists the bbox-prunable predicates and does the intersect/contain math against
+		//! the file's bounding-box extent. Only prune when the result is provably empty.
+		if (stats.geometry_stats) {
+			auto result = GeometryStats::CheckZonemap(*stats.geometry_stats, expression_filter.expr);
+			return result != FilterPropagateResult::FILTER_ALWAYS_FALSE;
+		}
+
 		auto &expr = *expression_filter.expr;
 
 		switch (expr.type) {
+		case ExpressionType::COMPARE_GREATERTHAN:
+		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		case ExpressionType::COMPARE_LESSTHAN:
+		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		case ExpressionType::COMPARE_EQUAL: {
+			auto &compare_expr = expr.Cast<BoundComparisonExpression>();
+			auto comparison_type = compare_expr.GetExpressionType();
+			auto &left = *compare_expr.left;
+			auto &right = *compare_expr.right;
+
+			const bool right_is_const = right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+			const bool left_is_const = left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+
+			const bool left_is_ref = IsDirectReference(left);
+			const bool right_is_ref = IsDirectReference(right);
+
+			const bool is_identity = transform.Type() == IcebergTransformType::IDENTITY;
+
+			if (right_is_const && left_is_const) {
+				return true;
+			} else if (right_is_const) {
+				if (left_is_ref) {
+					return MatchBoundsConstant<TRANSFORM>(right.Cast<BoundConstantExpression>().value, comparison_type,
+					                                      stats, transform);
+				} else if (is_identity && IsVariantReference(left)) {
+					return MatchTransformedBounds<TRANSFORM>(context, expr.type, left, right, stats, transform);
+					;
+				}
+			} else if (left_is_const) {
+				if (right_is_ref) {
+					return MatchBoundsConstant<TRANSFORM>(left.Cast<BoundConstantExpression>().value,
+					                                      FlipComparisonExpression(comparison_type), stats, transform);
+				} else if (is_identity && IsVariantReference(right)) {
+					return MatchTransformedBounds<TRANSFORM>(context, expr.type, right, left, stats, transform);
+				}
+			}
+			return true;
+		}
 		case ExpressionType::OPERATOR_IS_NULL:
 		case ExpressionType::OPERATOR_IS_NOT_NULL: {
 			D_ASSERT(expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR);
@@ -203,38 +299,6 @@ bool MatchBoundsTemplated(ClientContext &context, const TableFilter &filter, con
 			}
 			D_ASSERT(expr.type == ExpressionType::OPERATOR_IS_NOT_NULL);
 			return MatchBoundsIsNotNullFilter<TRANSFORM>(stats, transform);
-		}
-		case ExpressionType::COMPARE_GREATERTHAN:
-		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		case ExpressionType::COMPARE_LESSTHAN:
-		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		case ExpressionType::COMPARE_EQUAL: {
-			// TableFilterType::EXPRESSION_FILTER on strings (e.g len(my_string_col)) do not maintain lexicographic
-			// ordering properties
-			if (stats.lower_bound.type() == LogicalType::VARCHAR) {
-				return true;
-			}
-			D_ASSERT(expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON);
-			auto &compare_expr = expr.Cast<BoundComparisonExpression>();
-			if (transform.Type() == IcebergTransformType::IDENTITY) {
-				//! No further processing has been done on the stats (lower/upper bounds)
-				auto &left = *compare_expr.left;
-				auto &right = *compare_expr.right;
-
-				bool left_foldable = left.IsFoldable();
-				bool right_foldable = right.IsFoldable();
-				if (!left_foldable && !right_foldable) {
-					//! Both are not foldable, can't evaluate at all
-					return true;
-				}
-
-				if (left_foldable) {
-					return MatchTransformedBounds<TRANSFORM>(context, expr.type, right, left, stats, transform);
-				} else {
-					return MatchTransformedBounds<TRANSFORM>(context, expr.type, left, right, stats, transform);
-				}
-				return true;
-			}
 		}
 		// TODO: Implement ExpressionType::BOUND_BETWEEN and COMPARE_IN.
 		// https://github.com/duckdblabs/duckdb-internal/issues/8497

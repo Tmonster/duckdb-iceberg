@@ -42,6 +42,7 @@ set(EXTENSION_SOURCES
 	src/catalog/rest/storage/authorization/sigv4.cpp
 	src/catalog/rest/storage/aws.cpp
 	src/catalog/rest/storage/iceberg_authorization.cpp
+	src/catalog/rest/storage/iceberg_table_secret_provider.cpp
 	src/catalog/rest/transaction/iceberg_transaction_data.cpp
 	src/catalog/rest/transaction/iceberg_transaction_manager.cpp
 	src/catalog/rest/transaction/iceberg_transaction.cpp
@@ -110,6 +111,8 @@ set(EXTENSION_SOURCES
 	src/planning/metadata_io/manifest_list/iceberg_manifest_list_reader.cpp
 	src/planning/pruning/iceberg_predicate.cpp
 	src/planning/snapshot/iceberg_snapshot_lookup.cpp
+	src/storage/statistics/iceberg_variant_statistics.cpp
+	src/storage/statistics/iceberg_statistics.cpp
 )
 
 add_subdirectory(src/rest_catalog/objects)
