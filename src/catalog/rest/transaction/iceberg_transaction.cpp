@@ -276,10 +276,42 @@ static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
 }
 
 void IcebergTransaction::DropSecrets(ClientContext &context) {
-	auto &secret_manager = SecretManager::Get(context);
-	for (auto &secret_name : created_secrets) {
-		(void)secret_manager.DropSecretByName(context, secret_name, OnEntryNotFound::RETURN_NULL);
+	bool started_transaction = false;
+	auto rollback_started_transaction = [&]() {
+		if (started_transaction && context.transaction.HasActiveTransaction()) {
+			context.transaction.Rollback(nullptr);
+		}
+	};
+	try {
+		if (!context.transaction.HasActiveTransaction()) {
+			context.transaction.BeginTransaction();
+			started_transaction = true;
+		}
+
+		auto &secret_manager = SecretManager::Get(context);
+		for (auto &secret_name : created_secrets) {
+			(void)secret_manager.DropSecretByName(context, secret_name, OnEntryNotFound::RETURN_NULL,
+			                                      SecretPersistType::TEMPORARY, SecretManager::TEMPORARY_STORAGE_NAME);
+		}
+
+		if (started_transaction) {
+			context.transaction.Commit();
+		}
+	} catch (std::exception &ex) {
+		rollback_started_transaction();
+		if (!started_transaction) {
+			throw;
+		}
+		ErrorData error(ex);
+		DUCKDB_LOG_DEBUG(context, "Failed to drop temporary Iceberg vended credential secrets: %s", error.Message());
+	} catch (...) {
+		rollback_started_transaction();
+		if (!started_transaction) {
+			throw;
+		}
+		DUCKDB_LOG_DEBUG(context, "Failed to drop temporary Iceberg vended credential secrets: unknown exception");
 	}
+	created_secrets.clear();
 }
 
 static rest_api_objects::TableUpdate CreateSetSnapshotRefUpdate(int64_t snapshot_id) {
@@ -316,7 +348,7 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 			continue;
 		}
 		auto &table_info = updated_table.second;
-		if (!table_info.transaction_data) {
+		if (!table_info.HasTransactionUpdates()) {
 			continue;
 		}
 		IcebergCommitState commit_state(table_info, context);
@@ -390,6 +422,8 @@ TableTransactionInfo IcebergTransaction::GetTransactionRequest(IcebergTransactio
 void IcebergTransaction::Commit() {
 	if (transaction_updates.empty() && created_schemas.empty() && deleted_schemas.empty() &&
 	    schema_property_updates.empty()) {
+		// Read-only transactions have no catalog commit work; temporary vended storage secrets
+		// are left to transaction/session cleanup.
 		return;
 	}
 
@@ -449,8 +483,15 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 
 	// if there are no new tables, we can post to the transactions/commit endpoint
 	// otherwise we fall back to posting a commit for each table.
-	const bool can_use_multi_table_commit =
-	    !transaction_info.has_assert_create && catalog.supported_urls.count("POST /v1/{prefix}/transactions/commit");
+	if (transaction.table_changes.empty()) {
+		alter_update.updated_tables.clear();
+		DropSecrets(context);
+		return;
+	}
+
+	const bool can_use_multi_table_commit = !transaction_info.has_assert_create &&
+	                                        !catalog.attach_options.disable_multi_table_commit &&
+	                                        catalog.supported_urls.count("POST /v1/{prefix}/transactions/commit");
 	if (can_use_multi_table_commit) {
 		// commit all transactions at once
 		std::unique_ptr<yyjson_mut_doc, YyjsonDocDeleter> doc_p(yyjson_mut_doc_new(nullptr));
@@ -644,7 +685,7 @@ public:
 
 void IcebergTransaction::CleanupFiles() {
 	// remove any files that were written
-	if (!catalog.attach_options.allows_deletes) {
+	if (!catalog.attach_options.remove_files_on_delete) {
 		// certain catalogs don't allow deletes and will have a s3.deletes attribute in the config describing this
 		// aws s3 tables rejects deletes and will handle garbage collection on its own, any attempt to delete the files
 		// on the aws side will result in an error.
@@ -698,6 +739,9 @@ void IcebergTransaction::CleanupFiles() {
 
 void IcebergTransaction::Rollback() {
 	CleanupFiles();
+	if (!this->context.expired()) {
+		DropSecrets(*this->context.lock());
+	}
 }
 
 IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
