@@ -1,5 +1,7 @@
 #include "core/deletes/iceberg_positional_delete.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
+#include "iceberg_logging.hpp"
+#include "duckdb/logging/logger.hpp"
 
 namespace duckdb {
 
@@ -39,6 +41,12 @@ void IcebergMultiFileList::ScanPositionalDeleteFile(const BoundIcebergManifestEn
 	reference<string_t> current_file_path = names[0];
 	auto initial_key = current_file_path.get().GetString();
 	auto deletes = TryGetOrCreate(positional_delete_data, bound_entry, initial_key);
+	//! We had to open and materialize this positional delete file to discover which data file(s) it targets.
+	//! Log the (delete_file -> referenced data_file) pair so that callers can tell whether the read was actually
+	//! needed: if the referenced data_file was pruned from the scan, reading this delete file was wasted work.
+	DUCKDB_LOG(context, IcebergLogType,
+	           "Iceberg Delete Scan, read 'positional_delete_file': '%s', referencing 'data_file': '%s'",
+	           bound_entry.entry.data_file.file_path, initial_key);
 
 	for (idx_t i = 0; i < count; i++) {
 		auto &name = names[i];
@@ -47,6 +55,9 @@ void IcebergMultiFileList::ScanPositionalDeleteFile(const BoundIcebergManifestEn
 		if (name != current_file_path.get()) {
 			current_file_path = name;
 			auto key = current_file_path.get().GetString();
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Iceberg Delete Scan, read 'positional_delete_file': '%s', referencing 'data_file': '%s'",
+			           bound_entry.entry.data_file.file_path, key);
 			deletes = TryGetOrCreate(positional_delete_data, bound_entry, key);
 		}
 		if (!deletes) {
