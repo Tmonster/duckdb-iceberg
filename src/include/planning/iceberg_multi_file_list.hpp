@@ -158,6 +158,10 @@ protected:
 	bool ManifestMatchesFilter(const IcebergManifestFile &manifest) const;
 	bool FileMatchesFilter(const IcebergManifestFile &manifest_file, const IcebergManifestEntry &manifest_entry,
 	                       IcebergManifestContentType file_type) const;
+	//! Whether a delete file's manifest entry can apply to any file selected by the current scan filter.
+	//! A delete file whose partition (or equality-value bounds) is excluded by the filter cannot delete a
+	//! row from any surviving data file, so it does not need to be read.
+	bool DeleteEntryMatchesFilters(const BoundIcebergManifestEntry &bound_manifest_entry) const;
 	// TODO: How to guarantee we only call this after the filter pushdown?
 	void InitializeFiles(lock_guard<mutex> &guard) const;
 
