@@ -15,6 +15,13 @@ struct DropInfo;
 class IcebergSchemaEntry;
 class IcebergTransaction;
 
+//! Outcome of re-resolving one table in IcebergTableSet::RefreshAll.
+struct IcebergTableRefreshResult {
+	string table_name;
+	bool refreshed = false;
+	string error;
+};
+
 class IcebergTableSet {
 public:
 	explicit IcebergTableSet(IcebergSchemaEntry &schema);
@@ -26,6 +33,10 @@ public:
 	void DropEntry(ClientContext &context, DropInfo &info, bool delete_entry);
 	void RenameEntry(const string &name, const string &new_name, IcebergTable &&new_table);
 	void InvalidateEntry(const string &name);
+	//! Re-list this schema and re-resolve every table in it, discarding what was resolved before.
+	//! Each table is replaced rather than refilled, so a query still holding the previous version is
+	//! unaffected. One row is appended to 'results' per table, including the ones that failed.
+	void RefreshAll(ClientContext &context, vector<IcebergTableRefreshResult> &results);
 	static IcebergTable &CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
 	                                    CreateTableInfo &info);
 

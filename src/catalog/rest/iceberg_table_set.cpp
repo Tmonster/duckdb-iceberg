@@ -188,6 +188,33 @@ void IcebergTableSet::RenameEntry(const string &name, const string &new_name, Ic
 	}
 }
 
+void IcebergTableSet::RefreshAll(ClientContext &context, vector<IcebergTableRefreshResult> &results) {
+	annotated_lock_guard<annotated_mutex> lock(entry_lock);
+	//! The caller clears the transaction's listed_schemas first, so this re-lists rather than
+	//! short-circuiting, which is what picks up tables created or dropped elsewhere.
+	LoadEntriesInternal(context);
+	for (auto &entry : entries) {
+		IcebergTableRefreshResult result;
+		result.table_name = entry.first;
+		auto fresh = make_shared_ptr<IcebergTable>(catalog.Cast<IcebergCatalog>(), schema, entry.first);
+		try {
+			if (FillEntry(context, *fresh, IcebergTableLoadLevel::LISTING)) {
+				//! Swap rather than refill in place: the entry being replaced may still be handed out to
+				//! a running query as a 'CatalogEntry &'.
+				entry.second = std::move(fresh);
+				result.refreshed = true;
+			} else {
+				result.error = "table is no longer present in the catalog";
+			}
+		} catch (std::exception &ex) {
+			//! One unreadable table must not abort the refresh of the rest; report it instead.
+			ErrorData error(ex);
+			result.error = error.RawMessage();
+		}
+		results.push_back(std::move(result));
+	}
+}
+
 void IcebergTableSet::InvalidateEntry(const string &name) {
 	annotated_lock_guard<annotated_mutex> lock(entry_lock);
 	auto it = entries.find(name);
