@@ -101,6 +101,7 @@ void IcebergForceRefreshFunction(ClientContext &context, TableFunctionInput &dat
 		output.data[3].SetValue(count, row.error.empty() ? Value(LogicalType::VARCHAR) : Value(row.error));
 		count++;
 	}
+	output.SetChildCardinality(count);
 }
 
 } // namespace
