@@ -188,6 +188,17 @@ void IcebergTableSet::RenameEntry(const string &name, const string &new_name, Ic
 	}
 }
 
+void IcebergTableSet::InvalidateEntry(const string &name) {
+	annotated_lock_guard<annotated_mutex> lock(entry_lock);
+	auto it = entries.find(name);
+	if (it == entries.end()) {
+		return;
+	}
+	//! Swap in a fresh entry rather than resetting this one in place. The existing IcebergTables may
+	//! be used by other readers.
+	it->second = make_shared_ptr<IcebergTable>(catalog.Cast<IcebergCatalog>(), schema, name);
+}
+
 void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	bool schema_listed = iceberg_transaction.listed_schemas.find(schema.name.GetIdentifierName()) !=

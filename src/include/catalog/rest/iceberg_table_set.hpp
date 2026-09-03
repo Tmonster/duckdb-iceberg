@@ -25,6 +25,7 @@ public:
 	void ScanTables(ClientContext &context, const std::function<void(IcebergTable &)> &callback);
 	void DropEntry(ClientContext &context, DropInfo &info, bool delete_entry);
 	void RenameEntry(const string &name, const string &new_name, IcebergTable &&new_table);
+	void InvalidateEntry(const string &name);
 	static IcebergTable &CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
 	                                    CreateTableInfo &info);
 
