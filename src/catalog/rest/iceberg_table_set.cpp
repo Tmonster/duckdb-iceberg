@@ -10,6 +10,7 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/planner/expression_binder/table_function_binder.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/logging/logger.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
@@ -30,6 +31,7 @@ IcebergTableSet::IcebergTableSet(IcebergSchemaEntry &schema) : schema(schema), c
 }
 
 bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
+	// If the table is already loaded, no need to fill again
 	if (!table.schema_versions.empty()) {
 		return true;
 	}
@@ -100,11 +102,23 @@ IcebergTableSchemaVersion &IcebergTableSet::GetOrCreateDummy(IcebergTable &table
 void IcebergTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
 	annotated_lock_guard<annotated_mutex> lock(entry_lock);
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	LoadEntriesInternal(context);
+	const bool eager = ic_catalog.attach_options.table_resolution == IcebergTableResolution::EAGER;
 	for (auto &entry : entries) {
 		auto &table_info = *entry.second;
 		auto table_key = table_info.GetTableKey();
 		iceberg_transaction.tables[table_key] = entry.second;
+
+		if (eager && table_info.schema_versions.empty()) {
+			try {
+				FillEntry(context, table_info);
+			} catch (std::exception &ex) {
+				ErrorData error(ex);
+				DUCKDB_LOG_WARNING(context, "Could not resolve the columns of Iceberg table '%s' while listing: %s",
+				                   table_key, error.RawMessage());
+			}
+		}
 
 		if (!table_info.schema_versions.empty()) {
 			// The table has already been resolved (e.g. via DESCRIBE or a scan), so its full schema -
@@ -167,6 +181,44 @@ void IcebergTableSet::RenameEntry(const string &name, const string &new_name, Ic
 	if (old_version) {
 		throw TransactionException("Table %s was already created by a different transaction!", new_name);
 	}
+}
+
+void IcebergTableSet::RefreshAll(ClientContext &context, vector<IcebergTableRefreshResult> &results) {
+	annotated_lock_guard<annotated_mutex> lock(entry_lock);
+	//! The caller clears the transaction's listed_schemas first, so this re-lists rather than
+	//! short-circuiting, which is what picks up tables created or dropped elsewhere.
+	LoadEntriesInternal(context);
+	for (auto &entry : entries) {
+		IcebergTableRefreshResult result;
+		result.table_name = entry.first;
+		auto fresh = make_shared_ptr<IcebergTable>(catalog.Cast<IcebergCatalog>(), schema, entry.first);
+		try {
+			if (FillEntry(context, *fresh, IcebergTableLoadLevel::LISTING)) {
+				//! Swap rather than refill in place: the entry being replaced may still be handed out to
+				//! a running query as a 'CatalogEntry &'.
+				entry.second = std::move(fresh);
+				result.refreshed = true;
+			} else {
+				result.error = "table is no longer present in the catalog";
+			}
+		} catch (std::exception &ex) {
+			//! One unreadable table must not abort the refresh of the rest; report it instead.
+			ErrorData error(ex);
+			result.error = error.RawMessage();
+		}
+		results.push_back(std::move(result));
+	}
+}
+
+void IcebergTableSet::InvalidateEntry(const string &name) {
+	annotated_lock_guard<annotated_mutex> lock(entry_lock);
+	auto it = entries.find(name);
+	if (it == entries.end()) {
+		return;
+	}
+	//! Swap in a fresh entry rather than resetting this one in place. The existing IcebergTables may
+	//! be used by other readers.
+	it->second = make_shared_ptr<IcebergTable>(catalog.Cast<IcebergCatalog>(), schema, name);
 }
 
 void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
