@@ -76,11 +76,10 @@ public:
 	static bool VerifyTableExistence(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
 	                                 const string &table);
 	static vector<string> ParseSchemaName(const string &namespace_name);
-	//! 'load_level' selects how much of the table is requested; see IcebergTableLoadLevel. A LISTING load
-	//! asks for only the referenced snapshots and skips credential vending.
-	static APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>
-	GetTable(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
-	         const string &table_name, IcebergTableLoadLevel load_level = IcebergTableLoadLevel::FULL);
+	static APIResult<unique_ptr<const rest_api_objects::LoadTableResult>> GetTable(ClientContext &context,
+	                                                                               IcebergCatalog &catalog,
+	                                                                               const IcebergSchemaEntry &schema,
+	                                                                               const string &table_name);
 	static APIResult<unique_ptr<const rest_api_objects::LoadCredentialsResponse>>
 	GetTableCredentials(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
 	                    const string &table_name);
