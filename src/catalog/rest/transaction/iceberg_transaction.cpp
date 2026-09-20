@@ -562,10 +562,17 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 	}
 
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
-		for (auto &entry : alter_update.updated_tables) {
-			ic_catalog.table_request_cache.EvictIfCurrent(entry.second.get());
+	//! The commit is durable by this point (both commit paths throw on failure), so the cached views
+	//! of these tables can be dropped.
+	const bool evict_cache = ic_catalog.attach_options.max_table_staleness_micros.IsValid();
+	for (auto &entry : alter_update.updated_tables) {
+		auto &table = entry.second.get();
+		if (evict_cache) {
+			ic_catalog.table_request_cache.EvictIfCurrent(table);
 		}
+		// invnalidate the entry so a future query to information_schema.columns prompts a request for the latest
+		// metadata
+		table.schema.tables.InvalidateEntry(table.name);
 	}
 }
 
