@@ -144,6 +144,7 @@ jobs:
           ./build/release/test/unittest --order lex "test/sql/cloud/snowflake/*"
 
       - name: Test python cloud tests
+        if: false # eventually we need to re-enable these. Skipped since token is expired
         env:
           ICEBERG_CATALOG_CLIENT_ID: ${{ secrets.SNOWFLAKE_KEY_ID_S3 }}
           ICEBERG_CATALOG_CLIENT_SECRET: ${{ secrets.SNOWFLAKE_SECRET_KEY_S3 }}
