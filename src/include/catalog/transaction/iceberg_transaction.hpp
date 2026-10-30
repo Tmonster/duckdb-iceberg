@@ -69,6 +69,7 @@ public:
 	friend struct IcebergTransactionAlterUpdate;
 	friend class IcebergRestTransactionCommit;
 	friend class IcebergSqlTransactionCommit;
+	friend class IcebergFilesystemTransactionCommit;
 
 	IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context);
 	~IcebergTransaction() override;

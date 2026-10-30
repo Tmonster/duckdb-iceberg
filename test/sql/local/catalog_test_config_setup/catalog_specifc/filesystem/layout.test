@@ -1,0 +1,136 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/filesystem/layout.test
+# description: The directory layout of the Iceberg filesystem catalog, and what it doesn't support
+# group: [filesystem]
+
+require-env CATALOG_TEST_CONFIG_SETUP filesystem
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+ATTACH '{TEST_DIR}/layout_fs' AS fs (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+
+# A namespace is a directory
+statement ok
+CREATE SCHEMA fs.ns;
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/layout_fs/*');
+----
+0
+
+query I
+SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'fs' AND schema_name = 'ns';
+----
+ns
+
+query II
+FROM iceberg_schema_properties(fs.ns);
+----
+location	{TEST_DIR}/layout_fs/ns
+
+# A table is a directory with a 'metadata' directory: 'v<N>.metadata.json' files and the current version's hint
+statement ok
+CREATE TABLE fs.ns.t (i INT);
+
+statement ok
+INSERT INTO fs.ns.t VALUES (1), (2);
+
+query I
+SELECT parse_filename(file) FROM glob('{TEST_DIR}/layout_fs/ns/t/metadata/v*.metadata.json') ORDER BY ALL;
+----
+v1.metadata.json
+v2.metadata.json
+
+query I
+SELECT content FROM read_text('{TEST_DIR}/layout_fs/ns/t/metadata/version-hint.text');
+----
+2
+
+# Any Iceberg reader finds the table through its version hint
+query I
+SELECT sum(i) FROM iceberg_scan('{TEST_DIR}/layout_fs/ns/t');
+----
+3
+
+# A writer that stopped between the metadata file and the hint left a stale hint: readers find the newer version
+statement ok
+INSERT INTO fs.ns.t VALUES (10);
+
+statement ok
+COPY (SELECT '2') TO '{TEST_DIR}/layout_fs/ns/t/metadata/version-hint.text' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+DETACH fs;
+
+statement ok
+ATTACH '{TEST_DIR}/layout_fs' AS fs (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+
+query I
+SELECT sum(i) FROM fs.ns.t;
+----
+13
+
+statement ok
+INSERT INTO fs.ns.t VALUES (100);
+
+query I
+SELECT content FROM read_text('{TEST_DIR}/layout_fs/ns/t/metadata/version-hint.text');
+----
+4
+
+# The metadata-log records the replaced versions
+query I
+SELECT len(json_extract(content::JSON, '$."metadata-log"')::JSON[])
+FROM read_text('{TEST_DIR}/layout_fs/ns/t/metadata/v4.metadata.json');
+----
+3
+
+# A table's directory is how it is found: it can't have another location, and can't be renamed
+statement error
+CREATE TABLE fs.ns.elsewhere WITH ('location' = '{TEST_DIR}/elsewhere') AS SELECT 1 AS i;
+----
+a different 'location' is not supported
+
+statement error
+ALTER TABLE fs.ns.t RENAME TO renamed;
+----
+Renaming tables is not supported by Iceberg filesystem catalogs
+
+query I
+SELECT sum(i) FROM fs.ns.t;
+----
+113
+
+statement error
+CALL set_iceberg_schema_properties(fs.ns, {'owner': 'me'});
+----
+Namespace properties are not supported by Iceberg filesystem catalogs
+
+statement error
+CREATE VIEW fs.ns.v AS SELECT 1;
+----
+does not support creating views
+
+# Only empty namespaces can be dropped, dropping a table removes its directory
+statement error
+DROP SCHEMA fs.ns;
+----
+Namespace ns is not empty
+
+statement ok
+DROP TABLE fs.ns.t;
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/layout_fs/ns/t/**');
+----
+0
+
+statement ok
+DROP SCHEMA fs.ns;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'fs' AND schema_name = 'ns';
+----
+0

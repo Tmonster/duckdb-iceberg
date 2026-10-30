@@ -1,6 +1,7 @@
 #include "iceberg_attach.hpp"
 #include "catalog/rest/iceberg_rest_catalog.hpp"
 #include "catalog/sql/iceberg_sql_catalog.hpp"
+#include "catalog/filesystem/iceberg_filesystem_catalog.hpp"
 
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
@@ -403,6 +404,59 @@ static unique_ptr<Catalog> SqlCatalogAttach(ClientContext &context, AttachedData
 	return std::move(catalog);
 }
 
+//! Attach options with the same meaning for every catalog type, that apply to filesystem catalogs
+static const char *const FILESYSTEM_CATALOG_GENERIC_OPTIONS[] = {"default_schema", "remove_files_on_delete",
+                                                                 "support_nested_namespaces", "max_table_staleness",
+                                                                 "table_resolution"};
+
+static unique_ptr<Catalog> FilesystemCatalogAttach(ClientContext &context, AttachedDatabase &db, const string &name,
+                                                   AttachInfo &info, AttachOptions &options) {
+	IcebergAttachOptions attach_options;
+	attach_options.warehouse = info.path;
+	attach_options.name = name;
+	// Files are read and written with the user's storage secrets, there is no catalog server to vend credentials
+	attach_options.access_mode = IRCAccessDelegationMode::NONE;
+	optional<Identifier> default_schema;
+
+	unordered_map<string, Value> generic_options;
+	for (auto &entry : NormalizeIcebergAttachOptions(info.options)) {
+		auto &option = entry.first;
+		if (option == "type" || option == "read_only" || option == "catalog_type") {
+			continue;
+		}
+		if (std::find_if(std::begin(FILESYSTEM_CATALOG_GENERIC_OPTIONS), std::end(FILESYSTEM_CATALOG_GENERIC_OPTIONS),
+		                 [&](const char *generic) { return option == generic; }) ==
+		    std::end(FILESYSTEM_CATALOG_GENERIC_OPTIONS)) {
+			throw InvalidConfigurationException(
+			    "Unsupported option '%s' for an Iceberg filesystem catalog (CATALOG_TYPE 'filesystem')", option);
+		}
+		generic_options.emplace(entry);
+	}
+	ParseAttachOptions(attach_options, default_schema, generic_options);
+	auto warehouse = info.path;
+	StringUtil::RTrim(warehouse, "/");
+	if (warehouse.empty()) {
+		throw InvalidConfigurationException(
+		    "An Iceberg filesystem catalog needs a warehouse: ATTACH '<directory>' AS ... (CATALOG_TYPE 'filesystem')");
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	if (!fs.IsRemoteFile(warehouse) && options.access_mode != AccessMode::READ_ONLY) {
+		fs.CreateDirectoriesRecursive(warehouse);
+	}
+	DUCKDB_LOG_INFO(context, "Iceberg filesystem catalog '%s' attached: it supports a single writer only, concurrent "
+	                         "writers can lose each other's changes to namespaces",
+	                name);
+
+	auto catalog = make_uniq<IcebergFilesystemCatalog>(db, options.access_mode, attach_options, default_schema);
+	catalog->SetAttachOptions(options.options);
+	if (default_schema && !catalog->SchemaExists(context, default_schema->GetIdentifierName())) {
+		throw InvalidConfigurationException(
+		    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach",
+		    default_schema->GetIdentifierName());
+	}
+	return std::move(catalog);
+}
+
 } // namespace
 
 unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
@@ -421,9 +475,12 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	if (catalog_type == "sql" || catalog_type == "jdbc") {
 		return SqlCatalogAttach(context, db, name, info, options);
 	}
+	if (catalog_type == "filesystem" || catalog_type == "file_system" || catalog_type == "hadoop") {
+		return FilesystemCatalogAttach(context, db, name, info, options);
+	}
 	if (catalog_type != "rest") {
-		throw InvalidConfigurationException("Unrecognized 'catalog_type' (%s), accepted options are: rest, sql",
-		                                    catalog_type);
+		throw InvalidConfigurationException(
+		    "Unrecognized 'catalog_type' (%s), accepted options are: rest, sql, filesystem", catalog_type);
 	}
 
 	IcebergAttachOptions attach_options;

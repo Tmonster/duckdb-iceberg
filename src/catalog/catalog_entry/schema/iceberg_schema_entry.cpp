@@ -245,7 +245,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	// The view is only sent at commit, so reject catalogs without a create view endpoint here.
 	const auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	if (!ic_catalog.SupportsViews(IcebergViewOperation::CREATE)) {
-		throw NotImplementedException("This Iceberg REST catalog server does not support creating views");
+		throw NotImplementedException("This Iceberg catalog does not support creating views");
 	}
 
 	// IF NOT EXISTS also skips binding when the view exists, so handle conflicts first.
