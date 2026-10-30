@@ -21,9 +21,11 @@ public:
 	static void CheckRequirements(optional_ptr<const IcebergTableMetadata> base,
 	                              const vector<rest_api_objects::TableRequirement> &requirements);
 
-	//! Write 'metadata' as the next version after 'previous_metadata_location' (empty for a new table) into
-	//! 'metadata_directory', recording the previous file in the metadata-log. Returns the new file's path.
+	//! Write 'metadata' as the next version after 'previous' (nullptr for a new table), whose metadata file is
+	//! 'previous_metadata_location', into 'metadata_directory'. The previous file is recorded in the metadata-log
+	//! with its own last-updated-ms. Returns the new file's path.
 	static string WriteMetadataFile(ClientContext &context, IcebergTableMetadata &metadata,
+	                                optional_ptr<const IcebergTableMetadata> previous,
 	                                const string &previous_metadata_location, const string &metadata_directory);
 	//! The version of a metadata file named '<version>-<uuid>.metadata.json' or 'v<version>.metadata.json',
 	//! or 0 if the name has neither format

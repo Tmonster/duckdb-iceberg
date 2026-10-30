@@ -34,7 +34,6 @@ void IcebergClientCommitVerifier::Prepare(const rest_api_objects::CommitTableReq
 	for (auto &requirement : request.requirements) {
 		creates_table |= requirement.assert_create.has_value();
 	}
-	unique_ptr<IcebergTableMetadata> base;
 	if (!creates_table) {
 		auto load_result = catalog.LoadTable(context, table.namespace_items, table.table_name);
 		if (load_result.error_) {
@@ -43,13 +42,14 @@ void IcebergClientCommitVerifier::Prepare(const rest_api_objects::CommitTableReq
 			                        load_result.error_->_error.message);
 		}
 		auto &load_table_result = *load_result.result_;
-		base = make_uniq<IcebergTableMetadata>(IcebergTableMetadata::FromTableMetadata(load_table_result.metadata));
+		table.base =
+		    make_uniq<IcebergTableMetadata>(IcebergTableMetadata::FromTableMetadata(load_table_result.metadata));
 		if (load_table_result.metadata_location) {
 			table.base_metadata_location = *load_table_result.metadata_location;
 		}
 	}
 	try {
-		table.expected = make_uniq<IcebergTableMetadata>(IcebergClientCommit::Apply(base.get(), request));
+		table.expected = make_uniq<IcebergTableMetadata>(IcebergClientCommit::Apply(table.base.get(), request));
 	} catch (std::exception &ex) {
 		table.error = ErrorData(ex).RawMessage();
 	}
@@ -68,8 +68,8 @@ void IcebergClientCommitVerifier::VerifyTable(PreparedTable &table, const Iceber
 	// Write the client-side result next to the table's metadata and read it back, to verify the metadata file too
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto written = table.expected->Copy();
-	auto path = IcebergClientCommit::WriteMetadataFile(context, written, table.base_metadata_location,
-	                                                   written.GetMetadataPath(fs));
+	auto path = IcebergClientCommit::WriteMetadataFile(context, written, table.base.get(),
+	                                                   table.base_metadata_location, written.GetMetadataPath(fs));
 	try {
 		auto reread = IcebergTableMetadata::FromTableMetadata(IcebergTableMetadata::Parse(path, fs, "none"));
 		for (auto &difference : IcebergClientCommit::Compare(reread, actual)) {
@@ -79,6 +79,16 @@ void IcebergClientCommitVerifier::VerifyTable(PreparedTable &table, const Iceber
 			differences.push_back(StringUtil::Format("in the written metadata file, metadata-log has %d entries "
 			                                         "instead of %d",
 			                                         reread.metadata_log.size(), written.metadata_log.size()));
+		} else if (table.base && !table.base_metadata_location.empty()) {
+			// The commit's base is the newest entry, recorded with the time it became current
+			auto &newest = reread.metadata_log.back();
+			if (newest.metadata_file != table.base_metadata_location ||
+			    newest.timestamp_ms.value != table.base->last_updated_ms.value) {
+				differences.push_back(StringUtil::Format(
+				    "in the written metadata file, the newest metadata-log entry is ('%s', %d) instead of ('%s', %d)",
+				    newest.metadata_file, newest.timestamp_ms.value, table.base_metadata_location,
+				    table.base->last_updated_ms.value));
+			}
 		}
 	} catch (...) {
 		fs.TryRemoveFile(path);

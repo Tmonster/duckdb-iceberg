@@ -425,12 +425,14 @@ idx_t IcebergClientCommit::ParseMetadataVersion(const string &metadata_location)
 }
 
 string IcebergClientCommit::WriteMetadataFile(ClientContext &context, IcebergTableMetadata &metadata,
+                                              optional_ptr<const IcebergTableMetadata> previous,
                                               const string &previous_metadata_location,
                                               const string &metadata_directory) {
 	idx_t version = 0;
-	if (!previous_metadata_location.empty()) {
+	if (previous && !previous_metadata_location.empty()) {
 		version = ParseMetadataVersion(previous_metadata_location) + 1;
-		metadata.metadata_log.emplace_back(previous_metadata_location, metadata.last_updated_ms);
+		// Each entry is a metadata file and the time it became the table's current metadata
+		metadata.metadata_log.emplace_back(previous_metadata_location, previous->last_updated_ms);
 	}
 	auto max_previous_versions = DEFAULT_PREVIOUS_VERSIONS_MAX;
 	auto max_previous_versions_property = metadata.GetTableProperty(PREVIOUS_VERSIONS_MAX);

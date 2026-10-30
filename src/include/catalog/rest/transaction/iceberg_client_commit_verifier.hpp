@@ -30,7 +30,8 @@ private:
 	struct PreparedTable {
 		vector<string> namespace_items;
 		string table_name;
-		//! The metadata file the commit was based on, empty if the commit creates the table
+		//! The metadata (file) the commit was based on, empty if the commit creates the table
+		unique_ptr<IcebergTableMetadata> base;
 		string base_metadata_location;
 		unique_ptr<IcebergTableMetadata> expected;
 		//! Set if the client-side commit rejected the request
