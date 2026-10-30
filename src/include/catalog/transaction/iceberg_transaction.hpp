@@ -67,6 +67,7 @@ class IcebergTransaction : public Transaction {
 public:
 	friend struct IcebergTransactionData;
 	friend struct IcebergTransactionAlterUpdate;
+	friend class IcebergRestTransactionCommit;
 
 	IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context);
 	~IcebergTransaction() override;
@@ -79,18 +80,10 @@ public:
 	AccessMode GetAccessMode() const {
 		return access_mode;
 	}
-	void DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
-	void DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context);
-	void DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context);
-	void DoSchemaCreates(ClientContext &context);
-	void DoSchemaDeletes(ClientContext &context);
-	void DoSchemaPropertyUpdates(ClientContext &context);
-	void DoViewCreates(ClientContext &context);
-	void DoViewDeletes(ClientContext &context);
+	//! Whether this transaction buffered any change that has to be published at commit
+	bool HasChanges() const;
 	void InvalidateViewEntry(const string &view_key);
 	IcebergCatalog &GetCatalog();
-	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
-	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
 	IcebergTransactionTableState &SetCatalogTableState(shared_ptr<IcebergTable> table);
 	IcebergTransactionTableState &SetTransactionTableState(const string &table_key, IcebergTable &&table,

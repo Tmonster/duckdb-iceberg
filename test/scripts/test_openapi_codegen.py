@@ -162,8 +162,12 @@ def test_inherited_const_and_array_valued_map_are_generated():
     assert 'obj.Add("snapshot-id", writer.CreateNull())' in nullable_source
     assert nullable_source.count('obj.Add("snapshot-id", writer.CreateNull())') == 1
 
-    transaction_source = (REPO_ROOT / "src/catalog/transaction/iceberg_transaction.cpp").read_text()
-    assert "AddExplicitNullSnapshotIds" not in transaction_source
+    for commit_source_path in [
+        "src/catalog/transaction/iceberg_transaction.cpp",
+        "src/catalog/rest/transaction/iceberg_rest_commit.cpp",
+    ]:
+        commit_source = (REPO_ROOT / commit_source_path).read_text()
+        assert "AddExplicitNullSnapshotIds" not in commit_source
 
 
 def test_table_metadata_accepts_null_current_snapshot_without_patching_spec():

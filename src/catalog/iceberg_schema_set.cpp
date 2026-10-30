@@ -69,7 +69,7 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		auto lookup_name = Identifier(name);
 		if (lookup_name == default_schema) {
 			// Verify the default schema does exist
-			if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
+			if (!ic_catalog.SchemaExists(context, name)) {
 				if (if_not_found == OnEntryNotFound::RETURN_NULL) {
 					return nullptr;
 				}

@@ -244,7 +244,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 
 	// The view is only sent at commit, so reject catalogs without a create view endpoint here.
 	const auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	if (!ic_catalog.supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/views")) {
+	if (!ic_catalog.SupportsViews(IcebergViewOperation::CREATE)) {
 		throw NotImplementedException("This Iceberg REST catalog server does not support creating views");
 	}
 
@@ -1154,7 +1154,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 			return view_entry;
 		}
 		// verify the schema exists
-		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name.GetIdentifierName())) {
+		if (!ic_catalog.SchemaExists(context, name.GetIdentifierName())) {
 			// set exists to false here
 			// we would like to throw an error, but this code is also called when listing schemas,
 			// and throwing an error will abort the listing process.
@@ -1182,7 +1182,7 @@ void IcebergSchemaEntry::LoadProperties(ClientContext &context) {
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 
-	auto get_namespace_result = IRCAPI::GetNamespace(context, ic_catalog, *this);
+	auto get_namespace_result = ic_catalog.LoadSchemaProperties(context, *this);
 	if (get_namespace_result.error_) {
 		throw HTTPException(StringUtil::Format("GetNamespace endpoint returned response code %s with message \"%s\"",
 		                                       EnumUtil::ToString(get_namespace_result.status_),

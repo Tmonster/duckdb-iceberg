@@ -12,7 +12,7 @@
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
-#include "catalog/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_catalog.hpp"
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "rest_catalog/objects/list.hpp"
@@ -40,7 +40,7 @@ struct IcebergLoadTableResponseGlobalState : public GlobalTableFunctionState {
 };
 
 static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const IcebergLoadTableResponseBindData &bind_data) {
-	auto &ic_catalog = bind_data.ic_catalog;
+	auto &ic_catalog = bind_data.ic_catalog.AsRest("iceberg_load_table_response");
 	auto &ic_schema = bind_data.ic_schema;
 	auto &ic_table_entry = bind_data.table_entry;
 

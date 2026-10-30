@@ -1,5 +1,5 @@
 #include "iceberg_attach.hpp"
-#include "catalog/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_catalog.hpp"
 
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
@@ -413,7 +413,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	// The bootstrap URI may have come from a secret or an endpoint preset.
 	client_options["uri"] = attach_options.catalog_uri;
 	auto catalog =
-	    make_uniq<IcebergCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
+	    make_uniq<IcebergRestCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
 	catalog->SetAttachOptions(options.options);
 
 	// /config is requested exactly once, using the bootstrap URI/warehouse/auth.

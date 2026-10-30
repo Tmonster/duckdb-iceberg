@@ -8,7 +8,7 @@
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
-#include "catalog/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_catalog.hpp"
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "rest_catalog/objects/list.hpp"
 #include "rest_catalog/objects/load_view_result.hpp"
@@ -41,7 +41,7 @@ struct IcebergViewMetadataGlobalState : public GlobalTableFunctionState {
 };
 
 static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const IcebergViewMetadataBindData &bind_data) {
-	auto &ic_catalog = bind_data.ic_catalog;
+	auto &ic_catalog = bind_data.ic_catalog.AsRest("iceberg_view_metadata");
 	auto &ic_schema = bind_data.ic_schema;
 
 	auto url_builder = ic_catalog.GetBaseUrl();

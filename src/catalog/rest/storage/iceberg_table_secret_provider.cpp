@@ -12,7 +12,7 @@
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_catalog.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
@@ -128,7 +128,7 @@ static unique_ptr<SecretEntry> GetNamedHTTPProxySecret(ClientContext &context, c
 	return nullptr;
 }
 
-static unique_ptr<SecretEntry> LookupHTTPSecretForCatalog(ClientContext &context, IcebergCatalog &catalog) {
+static unique_ptr<SecretEntry> LookupHTTPSecretForCatalog(ClientContext &context, IcebergRestCatalog &catalog) {
 	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
 	auto catalog_url = catalog.GetBaseUrl().GetURLEncoded();
 	auto secret_match = context.db->GetSecretManager().LookupSecret(transaction, catalog_url, "http");
@@ -140,17 +140,21 @@ static unique_ptr<SecretEntry> LookupHTTPSecretForCatalog(ClientContext &context
 
 unique_ptr<SecretEntry> IcebergTableSecretProvider::GetHTTPSecretForCatalog(ClientContext &context,
                                                                             IcebergCatalog &catalog) {
-	switch (catalog.auth_handler->type) {
+	auto rest_catalog = catalog.TryAsRest();
+	if (!rest_catalog) {
+		return nullptr;
+	}
+	switch (rest_catalog->auth_handler->type) {
 	case IcebergAuthorizationType::SIGV4: {
-		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
+		auto &sigv4 = rest_catalog->auth_handler->Cast<SIGV4Authorization>();
 		auto named_secret = GetNamedHTTPProxySecret(context, sigv4.secret);
 		if (named_secret) {
 			return named_secret;
 		}
-		return LookupHTTPSecretForCatalog(context, catalog);
+		return LookupHTTPSecretForCatalog(context, *rest_catalog);
 	}
 	case IcebergAuthorizationType::OAUTH2:
-		return LookupHTTPSecretForCatalog(context, catalog);
+		return LookupHTTPSecretForCatalog(context, *rest_catalog);
 	default:
 		return nullptr;
 	}
@@ -178,7 +182,8 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 	auto &table_info = table_entry.table_info;
 
 	auto refreshed_credentials =
-	    IRCAPI::GetTableCredentials(context, ic_catalog, iceberg_schema, table_name.GetIdentifierName());
+	    IRCAPI::GetTableCredentials(context, ic_catalog.AsRest("Refreshing vended credentials"), iceberg_schema,
+	                                table_name.GetIdentifierName());
 	if (refreshed_credentials.error_) {
 		throw HTTPException(StringUtil::Format("Could not refresh Iceberg vended credentials for table '%s': "
 		                                       "GetTableInformation returned response code %s with message \"%s\"",

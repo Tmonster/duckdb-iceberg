@@ -13,12 +13,10 @@
 #include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
 #include "catalog/rest/api/api_utils.hpp"
-#include "rest_catalog/objects/catalog_config.hpp"
 
 namespace duckdb {
 
@@ -109,13 +107,11 @@ void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
 	tables.erase(it);
 }
 
-IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
-                               unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options_p,
+IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode, IcebergAttachOptions &attach_options_p,
                                const optional<Identifier> &default_schema)
-    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
-      base_uri(attach_options_p.catalog_uri), version("v1"), attach_options(attach_options_p),
-      default_schema(default_schema), attach_path(attach_options.warehouse), warehouse(attach_options.warehouse),
-      schemas(*this), table_request_cache(attach_options) {
+    : Catalog(db_p), access_mode(access_mode), attach_options(attach_options_p), default_schema(default_schema),
+      attach_path(attach_options.warehouse), warehouse(attach_options.warehouse), schemas(*this),
+      table_request_cache(attach_options) {
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
@@ -162,8 +158,8 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 		return created_schema.get();
 	}
 
-	// Verify schema existence on the server first
-	bool schema_exists = IRCAPI::VerifySchemaExistence(*context, *this, schema_name);
+	// Verify schema existence in the catalog first
+	bool schema_exists = SchemaExists(*context, schema_name);
 
 	if (schema_exists) {
 		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
@@ -193,9 +189,8 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
 	}
 
-	// Verify schema existence on the server first
-	bool schema_exists =
-	    IRCAPI::VerifySchemaExistence(context, *this, info.GetQualifiedName().Name().GetIdentifierName());
+	// Verify schema existence in the catalog first
+	bool schema_exists = SchemaExists(context, info.GetQualifiedName().Name().GetIdentifierName());
 
 	if (!schema_exists) {
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
@@ -233,18 +228,6 @@ DatabaseSize IcebergCatalog::GetDatabaseSize(ClientContext &context) {
 
 ErrorData IcebergCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
 	return ErrorData();
-}
-
-//===--------------------------------------------------------------------===//
-// Iceberg REST Catalog
-//===--------------------------------------------------------------------===//
-
-IRCEndpointBuilder IcebergCatalog::GetBaseUrl() const {
-	auto url_builder = IRCEndpointBuilder();
-	url_builder.SetHost(base_uri);
-	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(version));
-
-	return url_builder;
 }
 
 unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context, const string &secret_name) {
@@ -304,6 +287,14 @@ unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context,
 	throw InvalidConfigurationException("Could not find a valid storage secret (s3 or aws)");
 }
 
+IcebergRestCatalog &IcebergCatalog::AsRest(const string &operation) {
+	auto rest_catalog = TryAsRest();
+	if (!rest_catalog) {
+		throw NotImplementedException("%s is only supported for Iceberg REST catalogs", operation);
+	}
+	return *rest_catalog;
+}
+
 IcebergSchemaSet &IcebergCatalog::GetSchemas() {
 	return schemas;
 }
@@ -346,143 +337,47 @@ unique_ptr<SecretEntry> IcebergCatalog::GetHTTPSecret(ClientContext &context, co
 	secret_entry = std::move(secret_match.secret_entry);
 	return secret_entry;
 }
-void IcebergCatalog::AddDefaultSupportedEndpoints() {
-	// insert namespaces based on REST API spec.
-	// List namespaces
-	supported_urls.insert("GET /v1/{prefix}/namespaces");
-	// create namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces");
-	// Load metadata for a Namespace
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}");
-	// Drop a namespace
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}");
-	// set or remove properties on a namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/properties");
-	// list all table identifiers
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables");
-	// create table in the namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables");
-	// get table from the catalog
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// commit updates to a tbale
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// drop table from a catalog
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// Register a table using given metadata file location.
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/register");
-	// send metrics report to this endpoint to be processed by the backend
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics");
-	// Rename a table from one identifier to another.
-	supported_urls.insert("POST /v1/{prefix}/tables/rename");
-	// commit updates to multiple tables in an atomic transaction
-	supported_urls.insert("POST /v1/{prefix}/transactions/commit");
-	// Views aren't in the spec defaults; catalogs that support them advertise via /v1/config
+//===--------------------------------------------------------------------===//
+// Catalog requests
+//===--------------------------------------------------------------------===//
+
+IcebergLoadTableRequest::IcebergLoadTableRequest(vector<string> namespace_items, string table_name)
+    : namespace_items(std::move(namespace_items)), table_name(std::move(table_name)) {
 }
 
-void IcebergCatalog::AddS3TablesEndpoints() {
-	// insert namespaces based on REST API spec.
-	// List namespaces
-	supported_urls.insert("GET /v1/{prefix}/namespaces");
-	// create namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces");
-	// Load metadata for a Namespace
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}");
-	// Drop a namespace
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}");
-	// list all table identifiers
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables");
-	// create table in the namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables");
-	// get table from the catalog
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// commit updates to a table
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// drop table from a catalog
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// Rename a table from one identifier to another.
-	supported_urls.insert("POST /v1/{prefix}/tables/rename");
-	// table exists
-	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// namespace exists
-	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}");
+IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
+	return catalog.LoadTable(context, namespace_items, table_name);
 }
 
-void IcebergCatalog::AddGlueEndpoints() {
-	// insert namespaces based on REST API spec.
-	// List namespaces
-	supported_urls.insert("GET /v1/{prefix}/namespaces");
-	// create namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces");
-	// Load metadata for a Namespace
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}");
-	// Drop a namespace
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}");
-	// list all table identifiers
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables");
-	// create table in the namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables");
-	// get table from the catalog
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// table exists
-	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// commit updates to a table
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// drop table from a catalog
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
+IcebergListTablesRequest::IcebergListTablesRequest(vector<string> namespace_items, bool allow_forbidden)
+    : namespace_items(std::move(namespace_items)), allow_forbidden(allow_forbidden) {
 }
 
-void IcebergCatalog::ParsePrefix() {
-	prefix.clear();
-	auto &prefix_property = attach_options.prefix;
-	if (prefix_property.empty()) {
-		return;
-	}
-
-	auto decoded_prefix = StringUtil::URLDecode(prefix_property);
-	if (attach_options.encode_entire_prefix || !StringUtil::Equals(decoded_prefix, prefix_property)) {
-		prefix.push_back(std::move(decoded_prefix));
-	} else {
-		prefix = StringUtil::Split(decoded_prefix, '/');
-	}
+IcebergListTablesResult IcebergListTablesRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
+	return catalog.ListTables(context, namespace_items, allow_forbidden);
 }
 
-void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::CatalogConfig &catalog_config,
-                               IcebergEndpointType endpoint_type) {
-	base_uri = attach_options.catalog_uri;
-	StringUtil::RTrim(base_uri, "/");
-	if (base_uri.empty()) {
-		throw InvalidConfigurationException("Missing 'uri' option for Iceberg attach");
-	}
-	attach_options.catalog_uri = base_uri;
-	warehouse = attach_options.warehouse;
-	ParsePrefix();
-	namespace_separator = attach_options.namespace_separator;
+IcebergListSchemasRequest::IcebergListSchemasRequest(vector<string> parent) : parent(std::move(parent)) {
+}
 
-	catalog_properties = catalog_config.defaults;
-	for (auto &entry : catalog_config.overrides) {
-		catalog_properties[entry.first] = entry.second;
-	}
+IcebergListSchemasResult IcebergListSchemasRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
+	return catalog.ListSchemas(context, parent);
+}
 
-	supported_urls.clear();
-	if (auto &endpoints = catalog_config.endpoints) {
-		for (auto &endpoint : *endpoints) {
-			supported_urls.insert(endpoint);
-		}
-	}
-	// should be if s3tables
-	if (!catalog_config.endpoints && endpoint_type == IcebergEndpointType::AWS_S3TABLES) {
-		supported_urls.clear();
-		AddS3TablesEndpoints();
-	} else if (!catalog_config.endpoints && endpoint_type == IcebergEndpointType::AWS_GLUE) {
-		supported_urls.clear();
-		AddGlueEndpoints();
-	} else if (!catalog_config.endpoints) {
-		AddDefaultSupportedEndpoints();
-	}
+IcebergListViewsRequest::IcebergListViewsRequest(vector<string> namespace_items)
+    : namespace_items(std::move(namespace_items)) {
+}
 
-	if (prefix.empty()) {
-		DUCKDB_LOG(context, IcebergLogType, "No prefix found for catalog with warehouse value %s", warehouse);
-	}
+IcebergListViewsResult IcebergListViewsRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
+	return catalog.ListViews(context, namespace_items);
+}
+
+IcebergLoadViewRequest::IcebergLoadViewRequest(vector<string> namespace_items, string view_name)
+    : namespace_items(std::move(namespace_items)), view_name(std::move(view_name)) {
+}
+
+IcebergLoadViewResult IcebergLoadViewRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
+	return catalog.LoadView(context, namespace_items, view_name);
 }
 
 //===--------------------------------------------------------------------===//

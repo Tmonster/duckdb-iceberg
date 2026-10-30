@@ -16,16 +16,13 @@
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/deque.hpp"
 
-#include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "common/iceberg_constants.hpp"
 #include "catalog/iceberg_catalog.hpp"
 #include "catalog/iceberg_request_executor.hpp"
 #include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "catalog/transaction/iceberg_transaction_update.hpp"
@@ -42,7 +39,7 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto publication = ic_catalog.table_request_cache.BeginLoad(table.GetTableKey());
-	return ApplyLoadResult(context, table, IRCAPI::GetTable(context, ic_catalog, schema, table.name), *publication);
+	return ApplyLoadResult(context, table, ic_catalog.LoadTable(context, schema.namespace_items, table.name), *publication);
 }
 
 bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable &table) {
@@ -428,10 +425,9 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	                                               iceberg_version.GetIndex(), bootstrap_metadata.table_properties,
 	                                               bootstrap_metadata.location);
 
-	// Immediately create the table with stage_create = true to get metadata & data location(s)
-	// transaction commit will either commit with data (OR) create the table with stage_create = false
+	// Get the table's initial metadata & data location(s); the catalog publishes the table at commit
 	auto new_table_result = make_uniq<const rest_api_objects::LoadTableResult>(
-	    IRCAPI::CommitNewTable(context, catalog, schema.namespace_items, create_table_request));
+	    catalog.PrepareCreateTable(context, schema.namespace_items, create_table_request));
 
 	auto key = IcebergTable::GetTableKey(catalog, schema.namespace_items, info.GetTableName().GetIdentifierName());
 	auto &load_table_result = *new_table_result;
@@ -503,7 +499,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	// path separators before routing, so use the listing to rule out absent path names.
 	// Listed entries and transaction-local tables still take precedence over files.
 	if (table_name.find_first_of("/\\") != string::npos &&
-	    EntryMissingFromListing(IRCAPI::GetTables(context, ic_catalog, schema), table_name)) {
+	    EntryMissingFromListing(ic_catalog.ListTables(context, schema.namespace_items, true), table_name)) {
 		return nullptr;
 	}
 	auto new_version = IcebergTable::CreatePlaceholder(ic_catalog, schema, table_name);
@@ -537,7 +533,7 @@ const unordered_set<string> &IcebergTableSet::LoadViewEntries(ClientContext &con
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	IcebergListViewsResult views;
-	if (ic_catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views")) {
+	if (ic_catalog.SupportsViews(IcebergViewOperation::LIST)) {
 		IcebergRequestExecutor executor(context, ic_catalog);
 		auto result = executor.Schedule(IcebergListViewsRequest(schema.namespace_items));
 		views = executor.WaitAndTakeResult(*result);
@@ -594,19 +590,18 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetViewEntry(ClientContext &context,
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	// Check if the view endpoint is supported
-	if (ic_catalog.supported_urls.find("GET /v1/{prefix}/namespaces/{namespace}/views/{view}") ==
-	    ic_catalog.supported_urls.end()) {
+	if (!ic_catalog.SupportsViews(IcebergViewOperation::LOAD)) {
 		return nullptr;
 	}
 
 	// Apply the same file-path probe handling as table lookup, after local view resolution.
 	if (view_name.find_first_of("/\\") != string::npos &&
-	    ic_catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views") &&
-	    EntryMissingFromListing(IRCAPI::GetViews(context, ic_catalog, schema), view_name)) {
+	    ic_catalog.SupportsViews(IcebergViewOperation::LIST) &&
+	    EntryMissingFromListing(ic_catalog.ListViews(context, schema.namespace_items), view_name)) {
 		return nullptr;
 	}
 
-	return ApplyViewLoadResult(context, view_name, IRCAPI::GetView(context, ic_catalog, schema, view_name));
+	return ApplyViewLoadResult(context, view_name, ic_catalog.LoadView(context, schema.namespace_items, view_name));
 }
 
 optional_ptr<CatalogEntry> IcebergTableSet::ApplyViewLoadResult(ClientContext &context, const string &view_name,
@@ -725,7 +720,7 @@ void IcebergTableSet::ScanViews(ClientContext &context, const std::function<void
 		optional_ptr<CatalogEntry> local;
 		// Keep file-path probes on the ordinary lookup path, including their listing checks.
 		if (!TryGetLocalViewEntry(context, load.name, local) && load.name.find_first_of("/\\") == string::npos &&
-		    ic_catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views/{view}")) {
+		    ic_catalog.SupportsViews(IcebergViewOperation::LOAD)) {
 			load.result = executor.Schedule(IcebergLoadViewRequest(schema.namespace_items, load.name));
 		}
 		pending.push_back(std::move(load));

@@ -12,117 +12,14 @@
 #include "iceberg_attach.hpp"
 #include "rest_catalog/objects/list.hpp"
 #include "rest_catalog/objects/load_view_result.hpp"
+#include "catalog/iceberg_catalog_requests.hpp"
 
 namespace duckdb {
 
-class IcebergCatalog;
+class IcebergRestCatalog;
 struct IcebergCreateTableRequest;
 class IcebergSchemaEntry;
 class IcebergTableSchemaVersion;
-
-struct IRCAPISchema {
-	//! The (potentially multiple) levels that the namespace is made up of
-	vector<string> items;
-	string catalog_name;
-};
-
-struct IRCAPICredentials {
-	vector<rest_api_objects::StorageCredential> storage_credentials;
-	//! Top-level config override used to build the refreshed secret; unset uses the existing table config.
-	//! The LoadTable fallback currently supplies an empty override when config is omitted.
-	optional<case_insensitive_map_t<string>> config;
-};
-
-enum class IRCEntryLookupStatus : uint8_t { EXISTS = 0, NOT_FOUND = 1, API_ERROR = 2 };
-
-// Some API responses have error messages that need to be checked before being raised
-// to the user, since sometimes is does not mean whole operation has failed.
-// Ex: Glue will return an error when trying to get the metadata for a non-iceberg table during a list tables operation
-//     The complete operation did not fail, just getting metadata for one table
-template <typename T>
-class APIResult {
-public:
-	APIResult() {};
-
-	T result_;
-	HTTPStatusCode status_;
-	optional<rest_api_objects::IcebergErrorResponse> error_;
-};
-
-using IcebergLoadTableResult = APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>;
-using IcebergLoadViewResult = APIResult<unique_ptr<const rest_api_objects::LoadViewResult>>;
-
-//! Owns the request inputs; execution only fetches and parses view metadata.
-//! SQL interpretation and transaction publication remain the caller's responsibility.
-class IcebergLoadViewRequest {
-public:
-	using Result = IcebergLoadViewResult;
-
-	IcebergLoadViewRequest(vector<string> namespace_items, string view_name);
-	IcebergLoadViewResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
-
-private:
-	vector<string> namespace_items;
-	string view_name;
-};
-
-//! Owns the request inputs; execution only fetches and parses a response.
-//! The caller supplies a live context and catalog and owns cache lookup and result publication.
-class IcebergLoadTableRequest {
-public:
-	using Result = IcebergLoadTableResult;
-
-	IcebergLoadTableRequest(vector<string> namespace_items, string table_name);
-	IcebergLoadTableResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
-
-private:
-	vector<string> namespace_items;
-	string table_name;
-};
-
-//! A refused table listing is distinct from a successful, empty listing.
-using IcebergListTablesResult = optional<vector<rest_api_objects::TableIdentifier>>;
-//! Schema listings retain already collected results if a subsequent page is refused.
-using IcebergListSchemasResult = vector<IRCAPISchema>;
-//! A refused view listing is distinct from an empty listing (including a missing namespace).
-using IcebergListViewsResult = optional<vector<rest_api_objects::TableIdentifier>>;
-
-//! Owns the namespace; execution fetches all pages without publishing view entries.
-class IcebergListViewsRequest {
-public:
-	using Result = IcebergListViewsResult;
-
-	explicit IcebergListViewsRequest(vector<string> namespace_items);
-	IcebergListViewsResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
-
-private:
-	vector<string> namespace_items;
-};
-
-//! Owns the namespace; execution fetches all pages without publishing catalog entries.
-class IcebergListTablesRequest {
-public:
-	using Result = IcebergListTablesResult;
-
-	explicit IcebergListTablesRequest(vector<string> namespace_items, bool allow_forbidden = true);
-	IcebergListTablesResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
-
-private:
-	vector<string> namespace_items;
-	bool allow_forbidden;
-};
-
-//! Owns the parent namespace; execution includes pagination and configured nested-namespace traversal.
-class IcebergListSchemasRequest {
-public:
-	using Result = IcebergListSchemasResult;
-
-	explicit IcebergListSchemasRequest(vector<string> parent);
-	IcebergListSchemasResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
-
-private:
-	vector<string> parent;
-};
 
 class CommitResult {
 public:
@@ -151,51 +48,63 @@ class IRCAPI {
 public:
 	static const string API_VERSION_1;
 	//! Returns 'nullopt' if the catalog refused the listing, which must not be read as "the schema is empty".
-	static IcebergListTablesResult GetTables(ClientContext &context, IcebergCatalog &catalog,
+	static IcebergListTablesResult GetTables(ClientContext &context, IcebergRestCatalog &catalog,
 	                                         const IcebergSchemaEntry &schema);
-	static bool VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRCEndpointBuilder &url_builder,
+	static bool VerifyResponse(ClientContext &context, IcebergRestCatalog &catalog, IRCEndpointBuilder &url_builder,
 	                           bool execute_head);
-	static bool VerifySchemaExistence(ClientContext &context, IcebergCatalog &catalog, const string &schema);
-	static bool VerifyTableExistence(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
+	static bool VerifySchemaExistence(ClientContext &context, IcebergRestCatalog &catalog, const string &schema);
+	static bool VerifyTableExistence(ClientContext &context, IcebergRestCatalog &catalog, const IcebergSchemaEntry &schema,
 	                                 const string &table);
 	static vector<string> ParseSchemaName(const string &namespace_name);
-	static IcebergLoadTableResult GetTable(ClientContext &context, IcebergCatalog &catalog,
+	static IcebergLoadTableResult LoadTable(ClientContext &context, IcebergRestCatalog &catalog,
+	                                        const vector<string> &namespace_items, const string &table_name);
+	//! Returns 'nullopt' if the catalog refused the listing and 'allow_forbidden' is set.
+	static IcebergListTablesResult ListTables(ClientContext &context, IcebergRestCatalog &catalog,
+	                                          const vector<string> &namespace_items, bool allow_forbidden);
+	//! Includes pagination and configured nested-namespace traversal.
+	static IcebergListSchemasResult ListSchemas(ClientContext &context, IcebergRestCatalog &catalog,
+	                                            const vector<string> &parent);
+	static IcebergListViewsResult ListViews(ClientContext &context, IcebergRestCatalog &catalog,
+	                                        const vector<string> &namespace_items);
+	static IcebergLoadViewResult LoadView(ClientContext &context, IcebergRestCatalog &catalog,
+	                                      const vector<string> &namespace_items, const string &view_name);
+	static IcebergLoadTableResult GetTable(ClientContext &context, IcebergRestCatalog &catalog,
 	                                       const IcebergSchemaEntry &schema, const string &table_name);
-	static APIResult<IRCAPICredentials> GetTableCredentials(ClientContext &context, IcebergCatalog &catalog,
+	static APIResult<IRCAPICredentials> GetTableCredentials(ClientContext &context, IcebergRestCatalog &catalog,
 	                                                        const IcebergSchemaEntry &schema, const string &table_name);
 	static APIResult<unique_ptr<const rest_api_objects::GetNamespaceResponse>>
-	GetNamespace(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema);
-	static IcebergListSchemasResult GetSchemas(ClientContext &context, IcebergCatalog &catalog,
+	GetNamespace(ClientContext &context, IcebergRestCatalog &catalog, const IcebergSchemaEntry &schema);
+	static IcebergListSchemasResult GetSchemas(ClientContext &context, IcebergRestCatalog &catalog,
 	                                           const vector<string> &parent);
-	static CommitResult CommitTableUpdate(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
+	static CommitResult CommitTableUpdate(ClientContext &context, IcebergRestCatalog &catalog, const vector<string> &schema,
 	                                      const string &table_name, const string &body);
-	static void CommitTableDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
+	static void CommitTableDelete(ClientContext &context, IcebergRestCatalog &catalog, const vector<string> &schema,
 	                              const string &table_name);
-	static void CommitTableRename(ClientContext &context, IcebergCatalog &catalog, const string &body);
-	static CommitResult CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &catalog, const string &body);
+	static void CommitTableRename(ClientContext &context, IcebergRestCatalog &catalog, const string &body);
+	static CommitResult CommitMultiTableUpdate(ClientContext &context, IcebergRestCatalog &catalog, const string &body);
 	//! returns false if the namespace already exists
-	static bool CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, const string &schema,
+	static bool CommitNamespaceCreate(ClientContext &context, IcebergRestCatalog &catalog, const string &schema,
 	                                  string body);
-	static void CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog,
+	static void CommitNamespaceDrop(ClientContext &context, IcebergRestCatalog &catalog,
 	                                const vector<string> &namespace_items);
-	static void CommitNamespacePropertiesUpdate(ClientContext &context, IcebergCatalog &catalog, string body,
+	static void CommitNamespacePropertiesUpdate(ClientContext &context, IcebergRestCatalog &catalog, string body,
 	                                            const vector<string> &namespace_items);
 	//! stage create = false, table is created immediately in the IRC
 	//! stage create = true, table is not created, but metadata is initialized and returned
-	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IcebergCatalog &catalog,
+	static rest_api_objects::LoadTableResult CommitNewTable(ClientContext &context, IcebergRestCatalog &catalog,
 	                                                        const vector<string> &namespace_items,
 	                                                        const IcebergCreateTableRequest &request);
-	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergCatalog &catalog,
+	static rest_api_objects::CatalogConfig GetCatalogConfig(ClientContext &context, IcebergRestCatalog &catalog,
 	                                                        const string &warehouse);
 
 	//! View operations
-	static IcebergListViewsResult GetViews(ClientContext &context, IcebergCatalog &catalog,
+	static IcebergListViewsResult GetViews(ClientContext &context, IcebergRestCatalog &catalog,
 	                                       const IcebergSchemaEntry &schema);
-	static IcebergLoadViewResult GetView(ClientContext &context, IcebergCatalog &catalog,
+	static IcebergLoadViewResult GetView(ClientContext &context, IcebergRestCatalog &catalog,
 	                                     const IcebergSchemaEntry &schema, const string &view_name);
-	static void CommitNewView(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
+	static void CommitNewView(ClientContext &context, IcebergRestCatalog &catalog, const IcebergSchemaEntry &schema,
 	                          const string &json_body);
-	static void CommitViewDelete(ClientContext &context, IcebergCatalog &catalog, const vector<string> &schema,
+	static void CommitViewDelete(ClientContext &context, IcebergRestCatalog &catalog, const vector<string> &schema,
 	                             const string &view_name);
 };
 
