@@ -21,6 +21,14 @@
 			]
 		}
 	],
+	"features": {
+		"postgres": {
+			"description": "PostgreSQL client library for the postgres_scanner extension, to test Iceberg SQL catalogs in PostgreSQL",
+			"dependencies": [
+				"libpq"
+			]
+		}
+	},
 	"vcpkg-configuration": {
 		"overlay-ports": [
 			"./vcpkg_ports"

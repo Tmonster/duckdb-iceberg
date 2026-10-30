@@ -143,6 +143,13 @@ jobs:
     with:
       artifact-name: duckdb-iceberg
 
+  test-sql-catalog:
+    name: Test against SQL catalogs
+    needs: build_iceberg
+    uses: ./.github/workflows/test-sql-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
   # Fixture catalog acts as the smoke test: it must pass before we spend CI on the other real catalogs.
   test-fixture:
     name: Test against fixture catalog
