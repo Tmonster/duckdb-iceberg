@@ -2,6 +2,10 @@
 
 #include "duckdb/common/common.hpp"
 
+#include <chrono>
+#include <random>
+#include <thread>
+
 namespace duckdb {
 
 struct IcebergTableMetadata;
@@ -29,6 +33,41 @@ struct IcebergRetryConfig {
 	//! exactly when a thundering herd needs spreading. `unit_random` in [0,1). Returns the new sleep;
 	//! the caller feeds it back as `prev_sleep` next iteration. Pure/unit-testable.
 	int64_t DecorrelatedBackoffMs(int64_t prev_sleep_ms, double unit_random) const;
+};
+
+//! Per-retry-loop backoff state: decorrelated jitter (de-synchronizes a thundering herd of
+//! concurrent writers) plus a cumulative total-timeout budget. Independent RNG per loop so
+//! concurrent committers do not wake in lockstep.
+struct IcebergRetryBackoff {
+	explicit IcebergRetryBackoff(const IcebergRetryConfig &config_p)
+	    : config(config_p), prev_sleep_ms(config_p.min_wait_ms), start(std::chrono::steady_clock::now()),
+	      rng(std::random_device {}() ^
+	          static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count())),
+	      dist(0.0, 1.0) {
+	}
+
+	//! Sleep before the next attempt (attempt is the just-failed 0-based attempt index). Returns
+	//! false if the wait would exceed commit.retry.total-timeout-ms (only after >=1 retry, mirroring
+	//! Java's Tasks.runTaskWithRetry), signalling the caller to stop retrying.
+	bool WaitBeforeRetry(idx_t attempt) {
+		auto wait_ms = config.DecorrelatedBackoffMs(prev_sleep_ms, dist(rng));
+		prev_sleep_ms = wait_ms;
+		auto elapsed_ms =
+		    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+		if (attempt > 0 && (wait_ms > config.total_wait_ms || elapsed_ms > config.total_wait_ms - wait_ms)) {
+			return false;
+		}
+		if (wait_ms > 0) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
+		}
+		return true;
+	}
+
+	IcebergRetryConfig config;
+	int64_t prev_sleep_ms;
+	std::chrono::steady_clock::time_point start;
+	std::mt19937_64 rng;
+	std::uniform_real_distribution<double> dist;
 };
 
 } // namespace duckdb

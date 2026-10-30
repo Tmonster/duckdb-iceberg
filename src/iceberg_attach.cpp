@@ -1,5 +1,6 @@
 #include "iceberg_attach.hpp"
 #include "catalog/rest/iceberg_rest_catalog.hpp"
+#include "catalog/sql/iceberg_sql_catalog.hpp"
 
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
@@ -340,11 +341,91 @@ static bool AuthorizationChanged(const unordered_map<string, Value> &before,
 	return false;
 }
 
+//! Attach options with the same meaning for every catalog type
+static const char *const SQL_CATALOG_GENERIC_OPTIONS[] = {"default_schema",
+                                                          "purge_requested",
+                                                          "remove_files_on_delete",
+                                                          "support_nested_namespaces",
+                                                          "max_table_staleness",
+                                                          "table_resolution"};
+
+static unique_ptr<Catalog> SqlCatalogAttach(ClientContext &context, AttachedDatabase &db, const string &name,
+                                            AttachInfo &info, AttachOptions &options) {
+	IcebergAttachOptions attach_options;
+	attach_options.warehouse = info.path;
+	attach_options.name = name;
+	// Files are read and written with the user's storage secrets, there is no catalog server to vend credentials
+	attach_options.access_mode = IRCAccessDelegationMode::NONE;
+	optional<Identifier> default_schema;
+	string uri;
+	string catalog_name = name;
+	bool init_catalog_tables = true;
+
+	unordered_map<string, Value> generic_options;
+	for (auto &entry : NormalizeIcebergAttachOptions(info.options)) {
+		auto &option = entry.first;
+		if (option == "type" || option == "read_only" || option == "catalog_type") {
+			continue;
+		}
+		if (option == "uri") {
+			uri = entry.second.ToString();
+		} else if (option == "catalog_name") {
+			catalog_name = entry.second.ToString();
+		} else if (option == "init_catalog_tables") {
+			init_catalog_tables = entry.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+		} else if (std::find_if(std::begin(SQL_CATALOG_GENERIC_OPTIONS), std::end(SQL_CATALOG_GENERIC_OPTIONS),
+		                        [&](const char *generic) { return option == generic; }) !=
+		           std::end(SQL_CATALOG_GENERIC_OPTIONS)) {
+			generic_options.emplace(entry);
+		} else {
+			throw InvalidConfigurationException("Unsupported option '%s' for an Iceberg SQL catalog (CATALOG_TYPE 'sql')",
+			                                    option);
+		}
+	}
+	ParseAttachOptions(attach_options, default_schema, generic_options);
+	if (uri.empty()) {
+		throw InvalidConfigurationException("Missing 'uri' option for an Iceberg SQL catalog: the database holding "
+		                                    "the catalog, e.g. 'sqlite:///<path>' or 'postgresql://<host>/<database>'");
+	}
+	if (catalog_name.empty()) {
+		throw InvalidConfigurationException("'catalog_name' cannot be empty");
+	}
+
+	auto catalog = make_uniq<IcebergSqlCatalog>(db, options.access_mode, attach_options, default_schema,
+	                                            IcebergSqlCatalogUri::Parse(uri), catalog_name, init_catalog_tables);
+	catalog->SetAttachOptions(options.options);
+	catalog->Initialize(context);
+	if (default_schema && !catalog->SchemaExists(context, default_schema->GetIdentifierName())) {
+		throw InvalidConfigurationException(
+		    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach",
+		    default_schema->GetIdentifierName());
+	}
+	return std::move(catalog);
+}
+
 } // namespace
 
 unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                           AttachedDatabase &db, const string &name, AttachInfo &info,
                                           AttachOptions &options) {
+	string catalog_type = "rest";
+	for (auto it = info.options.begin(); it != info.options.end(); it++) {
+		if (StringUtil::CIEquals(it->first, "catalog_type")) {
+			catalog_type = StringUtil::Lower(it->second.ToString());
+			if (catalog_type == "rest") {
+				info.options.erase(it);
+			}
+			break;
+		}
+	}
+	if (catalog_type == "sql" || catalog_type == "jdbc") {
+		return SqlCatalogAttach(context, db, name, info, options);
+	}
+	if (catalog_type != "rest") {
+		throw InvalidConfigurationException("Unrecognized 'catalog_type' (%s), accepted options are: rest, sql",
+		                                    catalog_type);
+	}
+
 	IcebergAttachOptions attach_options;
 	attach_options.warehouse = info.path;
 	attach_options.name = name;

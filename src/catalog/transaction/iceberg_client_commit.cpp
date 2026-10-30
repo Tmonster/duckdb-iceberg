@@ -25,15 +25,6 @@ constexpr idx_t DEFAULT_PREVIOUS_VERSIONS_MAX = 100;
 	throw TransactionException("Conflict with a concurrent Iceberg commit, requirement failed: %s", message);
 }
 
-int32_t MaxFieldId(const vector<unique_ptr<IcebergColumnDefinition>> &columns) {
-	int32_t result = 0;
-	for (auto &column : columns) {
-		result = MaxValue(result, column->id);
-		result = MaxValue(result, MaxFieldId(column->GetChildren()));
-	}
-	return result;
-}
-
 IcebergTableMetadata EmptyMetadata() {
 	IcebergTableMetadata result(IcebergTableMetadataSchemas {});
 	result.iceberg_version = 1;
@@ -73,7 +64,7 @@ void ApplyAddSchema(IcebergTableMetadata &metadata, const rest_api_objects::AddS
 		rest_schema.object_1.schema_id = next_id;
 	}
 	auto schema = IcebergTableSchema::ParseSchema(rest_schema);
-	auto max_field_id = MaxFieldId(schema->columns);
+	auto max_field_id = schema->GetMaxFieldId();
 	auto &added = metadata.GetSchemasMutable().AddSchemaOrGetExisting(std::move(schema));
 	last_added.schema_id = added.schema_id;
 

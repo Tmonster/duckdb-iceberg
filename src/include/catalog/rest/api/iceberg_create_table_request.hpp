@@ -34,6 +34,12 @@ public:
 	const string &GetName() const {
 		return name;
 	}
+	//! The location requested for the table, empty to let the catalog choose one
+	const string &GetLocation() const {
+		return location;
+	}
+	//! The metadata of the new table, for catalogs that create tables without a catalog server
+	IcebergTableMetadata CreateInitialMetadata(const string &table_uuid, const string &table_location) const;
 	static void PopulateSchema(JSONWriter &writer, JSONMutableValue schema_json, const IcebergTableSchema &schema);
 
 private:

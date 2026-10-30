@@ -39,6 +39,19 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::ParseSchema(const rest_api_ob
 	return res;
 }
 
+static int32_t MaxFieldId(const vector<unique_ptr<IcebergColumnDefinition>> &columns) {
+	int32_t result = 0;
+	for (auto &column : columns) {
+		result = MaxValue(result, column->id);
+		result = MaxValue(result, MaxFieldId(column->GetChildren()));
+	}
+	return result;
+}
+
+int32_t IcebergTableSchema::GetMaxFieldId() const {
+	return MaxFieldId(columns);
+}
+
 rest_api_objects::Schema IcebergTableSchema::ToRESTObject() const {
 	JSONWriter writer;
 	auto root_object = writer.CreateObject();
