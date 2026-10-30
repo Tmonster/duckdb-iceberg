@@ -159,6 +159,7 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 		// Update table metadata with snapshot
 		table_metadata.last_updated_ms = snapshot.timestamp_ms;
 		table_metadata.current_snapshot_id = snapshot.snapshot_id;
+		table_metadata.snapshot_log.emplace_back(snapshot.snapshot_id, snapshot.timestamp_ms);
 		table_metadata.last_sequence_number = sequence_number;
 		table_metadata.snapshots.emplace(0, std::move(snapshot));
 	}

@@ -1,0 +1,5 @@
+{
+	"extends": ["mock_native.json"],
+	"description": "The native mock catalog suite with iceberg_verify_client_commit enabled: every table commit is also applied client-side, written to a metadata file and compared to the catalog's result.",
+	"on_init": "SET GLOBAL iceberg_verify_client_commit = true; CALL iceberg_test_catalog_init('{TEMP_DIR}/iceberg-native'); ATTACH '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true); CREATE SCHEMA IF NOT EXISTS my_datalake.default;"
+}
