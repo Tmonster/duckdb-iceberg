@@ -49,7 +49,9 @@ ATTACH 's3://bucket/warehouse' AS lake (
   `commit.retry.*` properties.
 - Dropping a table only unregisters it, unless the catalog is attached with `PURGE_REQUESTED true`, which
   removes the table's files if they are inside the warehouse.
-- Views are not supported yet.
+- Views are stored as `VIEW` rows of `iceberg_tables`, pointing to Iceberg view metadata files, as in the JDBC
+  catalog. Catalogs that still have the JDBC catalog's original schema, without the `iceberg_type` column,
+  don't support views. PyIceberg versions without apache/iceberg-python#3709 list these views as tables.
 
 ## Development setup
 

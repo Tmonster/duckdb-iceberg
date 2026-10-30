@@ -1,0 +1,95 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/sql/views.test
+# description: Views in the Iceberg SQL catalog: 'VIEW' rows of iceberg_tables pointing to view metadata files
+# group: [sql]
+
+require-env CATALOG_TEST_CONFIG_SETUP sql
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+ATTACH '{TEST_DIR}/views_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'duckdb:{TEST_DIR}/views_catalog.duckdb');
+
+statement ok
+CREATE SCHEMA cat.ns;
+
+statement ok
+CREATE TABLE cat.ns.t AS SELECT range AS i FROM range(4);
+
+statement ok
+CREATE VIEW cat.ns.v AS SELECT sum(i) AS total FROM cat.ns.t;
+
+query II
+SELECT table_name, iceberg_type FROM __iceberg_sql_cat.iceberg_tables ORDER BY ALL;
+----
+t	TABLE
+v	VIEW
+
+# The view metadata file is created at the view's default location
+query I
+SELECT metadata_location LIKE '{TEST_DIR}/views_wh/ns/v/metadata/00000-%.metadata.json'
+FROM __iceberg_sql_cat.iceberg_tables WHERE iceberg_type = 'VIEW';
+----
+true
+
+query III
+SELECT metadata."format-version"::INT, metadata."current-version-id"::INT,
+	metadata.versions[1].representations[1].dialect::VARCHAR
+FROM iceberg_view_metadata('cat.ns.v');
+----
+1	1	duckdb
+
+# Views and tables are listed separately
+query I
+SELECT name FROM (SHOW ALL TABLES) WHERE database = 'cat';
+----
+t
+
+query I
+SELECT view_name FROM duckdb_views() WHERE database_name = 'cat';
+----
+v
+
+statement ok
+DETACH cat;
+
+statement ok
+ATTACH '{TEST_DIR}/views_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'duckdb:{TEST_DIR}/views_catalog.duckdb');
+
+query I
+SELECT total FROM cat.ns.v;
+----
+6
+
+# Tables and views share one name space
+statement error
+CREATE VIEW cat.ns.t AS SELECT 1;
+----
+already exists
+
+statement ok
+DROP VIEW cat.ns.v;
+
+query I
+SELECT count(*) FROM __iceberg_sql_cat.iceberg_tables WHERE iceberg_type = 'VIEW';
+----
+0
+
+# The schema of a view created in a transaction is published with it
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA cat.view_ns;
+
+statement ok
+CREATE VIEW cat.view_ns.v AS SELECT 42 AS answer;
+
+statement ok
+COMMIT;
+
+query I
+SELECT answer FROM cat.view_ns.v;
+----
+42

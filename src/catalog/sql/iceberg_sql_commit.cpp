@@ -9,6 +9,11 @@
 
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/iceberg_view_entry.hpp"
+#include "duckdb/common/json_document.hpp"
+#include "duckdb/common/types/uuid.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "rest_catalog/objects/list.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/sql/iceberg_sql_catalog.hpp"
 #include "catalog/transaction/iceberg_client_commit.hpp"
@@ -50,11 +55,6 @@ void RollbackQuietly(Connection &connection) {
 } // namespace
 
 void IcebergSqlTransactionCommit::Commit() {
-	if (!transaction.created_views.empty() || !transaction.deleted_views.empty()) {
-		transaction.CleanupFiles();
-		throw NotImplementedException("Views are not supported by Iceberg SQL catalogs yet");
-	}
-
 	Connection temp_con(db);
 	temp_con.BeginTransaction();
 	auto &temp_con_context = temp_con.context;
@@ -102,6 +102,8 @@ void IcebergSqlTransactionCommit::CommitWithRetries(ClientContext &context) {
 				    }
 			    },
 			    transaction.transaction_update);
+			WriteViewDeletes(*connection);
+			WriteViewCreates(*connection, context);
 			WriteSchemaDeletes(*connection);
 			connection->Commit();
 		} catch (TransactionException &ex) {
@@ -355,6 +357,89 @@ void IcebergSqlTransactionCommit::WriteTableRename(Connection &connection,
 		auto &schema = original_table.schema;
 		schema.tables.RenameEntry(original_table.name, new_name, std::move(new_table));
 	});
+}
+
+void IcebergSqlTransactionCommit::WriteViewDeletes(Connection &connection) {
+	for (auto &deleted_view : transaction.deleted_views) {
+		auto &info = deleted_view.second;
+		auto changed = ChangedRows(IcebergSqlCatalog::Query(
+		    connection,
+		    StringUtil::Format("DELETE FROM %s WHERE catalog_name = $1 AND table_namespace = $2 AND table_name = $3 "
+		                       "AND iceberg_type = 'VIEW'",
+		                       catalog.CatalogTable(IcebergSqlCatalog::TABLES_TABLE)),
+		    {Value(catalog.GetCatalogName()), Value(IcebergSqlCatalog::NamespaceName(info.namespace_items)),
+		     Value(info.view_name)}));
+		if (changed != 1) {
+			throw CatalogException("View with name \"%s\" does not exist", info.view_name);
+		}
+	}
+	on_commit.push_back([this]() { transaction.deleted_views.clear(); });
+}
+
+void IcebergSqlTransactionCommit::WriteViewCreates(Connection &connection, ClientContext &context) {
+	auto &fs = FileSystem::GetFileSystem(context);
+	for (auto &created_view : transaction.created_views) {
+		auto &view_info = *created_view.second;
+		auto &view_name = view_info.GetViewName().GetIdentifierName();
+		// A schema created by this transaction is only published once the catalog transaction commits
+		auto &schema_name = view_info.GetQualifiedName().Schema().GetIdentifierName();
+		auto pending_schema = transaction.created_schemas.GetEntry(schema_name);
+		auto &schema_entry = pending_schema ? *pending_schema
+		                                    : catalog.GetSchemas()
+		                                          .GetEntry(context, schema_name, OnEntryNotFound::THROW_EXCEPTION)
+		                                          ->Cast<IcebergSchemaEntry>();
+
+		// The view's first metadata file, as a catalog server creates it from the CreateViewRequest
+		auto request_json = CreateIcebergViewRequestJSON(schema_entry, view_info);
+		auto request_doc = JSONDocument::Parse(request_json.c_str(), request_json.size());
+		auto request = rest_api_objects::CreateViewRequest::FromJSON(request_doc->GetRoot());
+		rest_api_objects::ViewMetadata metadata;
+		metadata.view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+		metadata.format_version = 1;
+		if (request.location) {
+			metadata.location = *request.location;
+		} else {
+			metadata.location = catalog.DefaultTableLocation(context, schema_entry.namespace_items, view_name);
+		}
+		StringUtil::RTrim(metadata.location, "/");
+		metadata.current_version_id = request.view_version.version_id;
+		rest_api_objects::ViewHistoryEntry history;
+		history.version_id = request.view_version.version_id;
+		history.timestamp_ms = request.view_version.timestamp_ms;
+		metadata.version_log.push_back(std::move(history));
+		metadata.versions.push_back(request.view_version.Copy());
+		metadata.schemas.push_back(request.schema.Copy());
+		metadata.properties = request.properties;
+
+		auto metadata_directory = fs.JoinPath(metadata.location, "metadata");
+		if (!fs.IsRemoteFile(metadata_directory)) {
+			fs.CreateDirectoriesRecursive(metadata_directory);
+		}
+		auto metadata_location = fs.JoinPath(
+		    metadata_directory, StringUtil::Format("00000-%s.metadata.json", UUID::ToString(UUID::GenerateRandomUUID())));
+		JSONWriter writer;
+		writer.SetRoot(metadata.ToJSON(writer));
+		auto content = writer.ToString();
+		{
+			auto file = fs.OpenFile(metadata_location, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE);
+			file->Write((void *)content.c_str(), content.size());
+			file->Close();
+		}
+		written_files.push_back(metadata_location);
+
+		try {
+			IcebergSqlCatalog::Query(
+			    connection,
+			    StringUtil::Format("INSERT INTO %s (catalog_name, table_namespace, table_name, metadata_location, "
+			                       "previous_metadata_location, iceberg_type) VALUES ($1, $2, $3, $4, NULL, 'VIEW')",
+			                       catalog.CatalogTable(IcebergSqlCatalog::TABLES_TABLE)),
+			    {Value(catalog.GetCatalogName()), Value(IcebergSqlCatalog::NamespaceName(schema_entry.namespace_items)),
+			     Value(view_name), Value(metadata_location)});
+		} catch (ConstraintException &) {
+			throw CatalogException("A table or view with name \"%s\" already exists", view_name);
+		}
+	}
+	on_commit.push_back([this]() { transaction.created_views.clear(); });
 }
 
 void IcebergSqlTransactionCommit::WriteSchemaDeletes(Connection &connection) {

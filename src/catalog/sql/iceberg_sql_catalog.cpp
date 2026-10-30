@@ -14,6 +14,8 @@
 #include "catalog/sql/iceberg_sql_commit.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "common/iceberg_utils.hpp"
+#include "duckdb/common/json_document.hpp"
 
 namespace duckdb {
 
@@ -357,16 +359,64 @@ IcebergLoadTableResult IcebergSqlCatalog::LoadTable(ClientContext &context, cons
 }
 
 bool IcebergSqlCatalog::SupportsViews(IcebergViewOperation operation) const {
-	return false;
+	// Catalogs with the V0 schema of the JDBC catalog can't tell views from tables
+	return has_iceberg_type_column;
 }
 
 IcebergListViewsResult IcebergSqlCatalog::ListViews(ClientContext &context, const vector<string> &namespace_items) {
-	return vector<rest_api_objects::TableIdentifier>();
+	Initialize(context);
+	vector<rest_api_objects::TableIdentifier> result;
+	if (!has_iceberg_type_column) {
+		return result;
+	}
+	auto connection = Connect();
+	auto rows = Query(*connection,
+	                  StringUtil::Format("SELECT table_name FROM %s WHERE catalog_name = $1 AND table_namespace = $2 "
+	                                     "AND iceberg_type = 'VIEW' ORDER BY table_name",
+	                                     CatalogTable(TABLES_TABLE)),
+	                  {Value(catalog_name), Value(NamespaceName(namespace_items))});
+	for (auto &row : rows) {
+		rest_api_objects::TableIdentifier identifier;
+		identifier._namespace.value = namespace_items;
+		identifier.name = row[0].ToString();
+		result.push_back(std::move(identifier));
+	}
+	return result;
 }
 
 IcebergLoadViewResult IcebergSqlCatalog::LoadView(ClientContext &context, const vector<string> &namespace_items,
                                                   const string &view_name) {
-	throw NotImplementedException("Views are not supported by Iceberg SQL catalogs yet");
+	Initialize(context);
+	IcebergLoadViewResult result;
+	vector<vector<Value>> rows;
+	if (has_iceberg_type_column) {
+		auto connection = Connect();
+		rows = Query(*connection,
+		             StringUtil::Format("SELECT metadata_location FROM %s WHERE catalog_name = $1 "
+		                                "AND table_namespace = $2 AND table_name = $3 AND iceberg_type = 'VIEW'",
+		                                CatalogTable(TABLES_TABLE)),
+		             {Value(catalog_name), Value(NamespaceName(namespace_items)), Value(view_name)});
+	}
+	if (rows.empty() || rows[0][0].IsNull()) {
+		result.status_ = HTTPStatusCode::NotFound_404;
+		rest_api_objects::IcebergErrorResponse error;
+		error._error.type = "NoSuchViewException";
+		error._error.message =
+		    StringUtil::Format("View does not exist: %s.%s", NamespaceName(namespace_items), view_name);
+		error._error.code = 404;
+		result.error_ = std::move(error);
+		return result;
+	}
+	auto metadata_location = rows[0][0].ToString();
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto json = IcebergUtils::FileToString(metadata_location, fs);
+	auto doc = JSONDocument::Parse(json.c_str(), json.size());
+	auto load_view_result = make_uniq<rest_api_objects::LoadViewResult>();
+	load_view_result->metadata = rest_api_objects::ViewMetadata::FromJSON(doc->GetRoot());
+	load_view_result->metadata_location = metadata_location;
+	result.status_ = HTTPStatusCode::OK_200;
+	result.result_ = std::move(load_view_result);
+	return result;
 }
 
 //===--------------------------------------------------------------------===//

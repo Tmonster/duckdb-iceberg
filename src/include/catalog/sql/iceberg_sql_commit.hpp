@@ -33,6 +33,8 @@ private:
 	                      ClientContext &context);
 	void WriteTableRename(Connection &connection, IcebergTransactionRenameUpdate &rename_update,
 	                      ClientContext &context);
+	void WriteViewDeletes(Connection &connection);
+	void WriteViewCreates(Connection &connection, ClientContext &context);
 	void WriteSchemaDeletes(Connection &connection);
 	//! Remove the metadata files written by a commit attempt that did not succeed
 	void RemoveWrittenFiles(ClientContext &context);

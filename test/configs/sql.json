@@ -90,6 +90,10 @@
 		{
 			"env_name": "SCAN_PLANNING_MODE",
 			"env_value": "client"
+		},
+		{
+			"env_name": "VIEW_SUPPORT",
+			"env_value": "true"
 		}
 	],
 	"skip_tests": [
@@ -115,7 +119,8 @@
 			"reason": "The test asserts the HTTP requests of a REST catalog",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_metadata.test"
 			]
 		},
 		{
@@ -134,6 +139,12 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_data_manifest_late_materialization.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_in_filter_partition_pruning.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_requests_to_partitioned_table.test"
+			]
+		},
+		{
+			"reason": "The test expects a REST catalog's restriction: a SQL catalog commits a view replacement (drop and create) atomically",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_view_transactions.test"
 			]
 		}
 	]
