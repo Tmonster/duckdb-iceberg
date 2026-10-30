@@ -1,5 +1,5 @@
-#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/transaction/iceberg_transaction_update.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
 
 namespace duckdb {
 

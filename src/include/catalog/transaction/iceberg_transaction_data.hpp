@@ -13,7 +13,7 @@
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
 #include "catalog/rest/api/table_update.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
+#include "catalog/transaction/iceberg_transaction_metadata.hpp"
 
 namespace duckdb {
 

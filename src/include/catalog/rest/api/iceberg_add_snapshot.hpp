@@ -11,7 +11,7 @@
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/manifest/iceberg_pending_manifest.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
+#include "catalog/transaction/iceberg_transaction_metadata.hpp"
 
 namespace duckdb {
 

@@ -1,4 +1,4 @@
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/exception.hpp"
@@ -20,10 +20,10 @@
 #include "iceberg_logging.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/iceberg_catalog.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"

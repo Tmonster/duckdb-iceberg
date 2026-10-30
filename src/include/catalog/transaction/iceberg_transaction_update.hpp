@@ -5,7 +5,7 @@
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 
 namespace duckdb {
 

@@ -1,4 +1,4 @@
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -15,16 +15,16 @@
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/named_parameter_map.hpp"
 
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "rest_catalog/objects/list.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_default.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
 
 namespace duckdb {
 class OAuth2Authorization;

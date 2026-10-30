@@ -1,6 +1,6 @@
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot_writer.hpp"
 
 namespace duckdb {

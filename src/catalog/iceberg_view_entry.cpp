@@ -1,4 +1,4 @@
-#include "catalog/rest/iceberg_view_entry.hpp"
+#include "catalog/iceberg_view_entry.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 

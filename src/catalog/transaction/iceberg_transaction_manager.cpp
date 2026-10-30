@@ -1,4 +1,4 @@
-#include "catalog/rest/transaction/iceberg_transaction_manager.hpp"
+#include "catalog/transaction/iceberg_transaction_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
 
 namespace duckdb {

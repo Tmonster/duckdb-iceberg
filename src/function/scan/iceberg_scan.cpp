@@ -25,7 +25,7 @@
 #include "common/iceberg_utils.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "function/iceberg_functions.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/function/partition_stats.hpp"

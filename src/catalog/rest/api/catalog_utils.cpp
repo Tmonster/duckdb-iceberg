@@ -1,7 +1,7 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/logging/logger.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "iceberg_logging.hpp"
 
 namespace duckdb {

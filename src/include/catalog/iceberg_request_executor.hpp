@@ -1,6 +1,6 @@
 #pragma once
 
-#include "catalog/rest/iceberg_request_task.hpp"
+#include "catalog/iceberg_request_task.hpp"
 
 #include <chrono>
 

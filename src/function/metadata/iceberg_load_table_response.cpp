@@ -12,9 +12,9 @@
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "rest_catalog/objects/list.hpp"
 #include "duckdb/common/json_document.hpp"
 

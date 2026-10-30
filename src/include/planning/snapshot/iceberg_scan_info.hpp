@@ -6,7 +6,7 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
 #include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
 
 namespace duckdb {

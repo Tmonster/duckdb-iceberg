@@ -3,10 +3,10 @@
 
 #include "duckdb/transaction/transaction.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
-#include "catalog/rest/iceberg_schema_set.hpp"
-#include "catalog/rest/transaction/iceberg_pending_schema_creates.hpp"
+#include "catalog/iceberg_schema_set.hpp"
+#include "catalog/transaction/iceberg_pending_schema_creates.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "catalog/transaction/iceberg_transaction_update.hpp"
 
 namespace duckdb {
 class IcebergCatalog;

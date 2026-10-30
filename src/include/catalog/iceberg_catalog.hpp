@@ -11,7 +11,7 @@
 #include "duckdb/common/http_util.hpp"
 
 #include "catalog/rest/api/url_utils.hpp"
-#include "catalog/rest/iceberg_schema_set.hpp"
+#include "catalog/iceberg_schema_set.hpp"
 #include "rest_catalog/objects/load_table_result.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "common/iceberg_utils.hpp"

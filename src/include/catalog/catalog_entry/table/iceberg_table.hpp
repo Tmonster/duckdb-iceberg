@@ -3,11 +3,11 @@
 #include "duckdb/catalog/catalog_entry.hpp"
 #include "duckdb/storage/external_file_cache/caching_file_system_wrapper.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
 #include "iceberg_attach.hpp"
 

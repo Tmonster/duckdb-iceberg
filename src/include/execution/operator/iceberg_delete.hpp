@@ -12,8 +12,8 @@
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "execution/operator/iceberg_pending_deletes.hpp"
 

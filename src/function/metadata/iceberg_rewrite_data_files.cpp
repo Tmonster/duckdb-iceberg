@@ -13,7 +13,7 @@
 #include "duckdb/parser/statement/copy_statement.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/planner/binder.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "function/iceberg_functions.hpp"

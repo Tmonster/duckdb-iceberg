@@ -21,8 +21,8 @@
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"

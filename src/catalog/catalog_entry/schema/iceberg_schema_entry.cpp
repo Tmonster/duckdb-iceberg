@@ -1,4 +1,4 @@
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -20,12 +20,12 @@
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "catalog/transaction/iceberg_transaction_update.hpp"
 #include "common/iceberg_default.hpp"
 #include "common/iceberg_geography_type.hpp"
 #include "iceberg_options.hpp"

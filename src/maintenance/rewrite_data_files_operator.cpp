@@ -7,7 +7,7 @@
 #include "duckdb/parallel/pipeline.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "execution/operator/iceberg_insert.hpp"

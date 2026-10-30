@@ -1,6 +1,6 @@
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
 
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -8,9 +8,9 @@
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
-#include "catalog/rest/iceberg_table_set.hpp"
+#include "catalog/iceberg_table_set.hpp"
 #include "catalog/rest/api/table_update.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"

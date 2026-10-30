@@ -13,8 +13,8 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/common/index_vector.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "execution/operator/iceberg_copy_to_file.hpp"

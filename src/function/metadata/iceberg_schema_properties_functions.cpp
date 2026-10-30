@@ -1,4 +1,4 @@
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/parser/tableref/joinref.hpp"
@@ -11,11 +11,11 @@
 
 #include "function/iceberg_functions.hpp"
 #include "common/iceberg_utils.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 
 #include <string>

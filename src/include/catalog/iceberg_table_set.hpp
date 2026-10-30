@@ -7,9 +7,9 @@
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
 
 namespace duckdb {
 struct CreateTableInfo;

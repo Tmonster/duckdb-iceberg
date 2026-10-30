@@ -1,4 +1,4 @@
-#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/iceberg_catalog.hpp"
 
 #include "duckdb/storage/database_size.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -9,10 +9,10 @@
 #include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
 
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "common/iceberg_utils.hpp"
