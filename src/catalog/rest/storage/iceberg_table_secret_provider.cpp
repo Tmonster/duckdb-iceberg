@@ -140,21 +140,21 @@ static unique_ptr<SecretEntry> LookupHTTPSecretForCatalog(ClientContext &context
 
 unique_ptr<SecretEntry> IcebergTableSecretProvider::GetHTTPSecretForCatalog(ClientContext &context,
                                                                             IcebergCatalog &catalog) {
-	auto rest_catalog = catalog.TryAsRest();
-	if (!rest_catalog) {
+	if (catalog.GetIcebergCatalogType() != IcebergCatalogType::REST) {
 		return nullptr;
 	}
-	switch (rest_catalog->auth_handler->type) {
+	auto &rest_catalog = catalog.Cast<IcebergRestCatalog>();
+	switch (rest_catalog.auth_handler->type) {
 	case IcebergAuthorizationType::SIGV4: {
-		auto &sigv4 = rest_catalog->auth_handler->Cast<SIGV4Authorization>();
+		auto &sigv4 = rest_catalog.auth_handler->Cast<SIGV4Authorization>();
 		auto named_secret = GetNamedHTTPProxySecret(context, sigv4.secret);
 		if (named_secret) {
 			return named_secret;
 		}
-		return LookupHTTPSecretForCatalog(context, *rest_catalog);
+		return LookupHTTPSecretForCatalog(context, rest_catalog);
 	}
 	case IcebergAuthorizationType::OAUTH2:
-		return LookupHTTPSecretForCatalog(context, *rest_catalog);
+		return LookupHTTPSecretForCatalog(context, rest_catalog);
 	default:
 		return nullptr;
 	}
@@ -182,7 +182,7 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 	auto &table_info = table_entry.table_info;
 
 	auto refreshed_credentials =
-	    IRCAPI::GetTableCredentials(context, ic_catalog.AsRest("Refreshing vended credentials"), iceberg_schema,
+	    IRCAPI::GetTableCredentials(context, ic_catalog.Cast<IcebergRestCatalog>(), iceberg_schema,
 	                                table_name.GetIdentifierName());
 	if (refreshed_credentials.error_) {
 		throw HTTPException(StringUtil::Format("Could not refresh Iceberg vended credentials for table '%s': "

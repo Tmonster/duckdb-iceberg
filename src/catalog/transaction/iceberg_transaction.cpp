@@ -73,37 +73,6 @@ IcebergCatalog &IcebergTransaction::GetCatalog() {
 	return catalog;
 }
 
-bool IcebergTransaction::CanUseMultiTableCommit(const IcebergTransactionAlterUpdate &alter_update) const {
-	if (!MultiTableCommitAvailable()) {
-		return false;
-	}
-	for (const auto &entry : alter_update.updated_tables) {
-		const auto &table_info = entry.second.get();
-		if (!table_info.transaction_data) {
-			continue;
-		}
-		if (table_info.transaction_data->has_assert_create) {
-			return false;
-		}
-	}
-	return true;
-}
-
-void IcebergTransaction::VerifyAlterUpdateAtomicity(const IcebergTransactionAlterUpdate &alter_update) const {
-	if (alter_update.updated_tables.size() <= 1) {
-		return;
-	}
-	if (CanUseMultiTableCommit(alter_update)) {
-		return;
-	}
-	throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it would "
-	                           "require multiple table commit requests without atomic multi-table commit support");
-}
-
-bool IcebergTransaction::MultiTableCommitAvailable() const {
-	return !catalog.attach_options.disable_multi_table_commit && catalog.SupportsMultiTableCommit();
-}
-
 bool IcebergTransaction::HasTableUpdate() const {
 	return !std::holds_alternative<std::monostate>(transaction_update);
 }

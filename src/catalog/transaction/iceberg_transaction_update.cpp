@@ -1,4 +1,5 @@
 #include "catalog/transaction/iceberg_transaction_update.hpp"
+#include "catalog/iceberg_catalog.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
 
 namespace duckdb {
@@ -17,7 +18,7 @@ IcebergTable &IcebergTransactionAlterUpdate::GetOrInitializeTable(const IcebergT
 		auto &transaction_state = state ? *state : transaction.GetOrCreateTransactionTableState(table);
 		auto &updated_table = transaction_state.GetOrCreateTransactionInfo(transaction);
 		it = updated_tables.emplace(table_key, updated_table).first;
-		transaction.VerifyAlterUpdateAtomicity(*this);
+		transaction.GetCatalog().VerifyTableUpdates(*this);
 	}
 	auto &result = it->second.get();
 	transaction.SetLatestTableState(table_key, IcebergTableStatus::ALIVE);
@@ -41,7 +42,7 @@ IcebergTable &IcebergTransactionAlterUpdate::CreateTable(const string &table_key
 	if (!emplace_res.second) {
 		throw InternalException("Table %s was already created somehow?", table_key);
 	}
-	transaction.VerifyAlterUpdateAtomicity(*this);
+	transaction.GetCatalog().VerifyTableUpdates(*this);
 	return created_table;
 }
 

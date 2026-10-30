@@ -243,7 +243,10 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator);
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
 	case_insensitive_map_t<Value> user_defaults;
-	auto rest_catalog = catalog.TryAsRest();
+	optional_ptr<IcebergRestCatalog> rest_catalog;
+	if (catalog.GetIcebergCatalogType() == IcebergCatalogType::REST) {
+		rest_catalog = catalog.Cast<IcebergRestCatalog>();
+	}
 	if (rest_catalog && rest_catalog->auth_handler->type == IcebergAuthorizationType::SIGV4) {
 		auto &sigv4_auth = rest_catalog->auth_handler->Cast<SIGV4Authorization>();
 		auto catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
@@ -732,7 +735,10 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	                 IcebergLogType::Redact(context, info.name.GetIdentifierName()),
 	                 IcebergLogType::Redact(context, info.scope), scope_source);
 
-	auto rest_catalog = catalog.TryAsRest();
+	optional_ptr<IcebergRestCatalog> rest_catalog;
+	if (catalog.GetIcebergCatalogType() == IcebergCatalogType::REST) {
+		rest_catalog = catalog.Cast<IcebergRestCatalog>();
+	}
 	if (rest_catalog && StringUtil::StartsWith(rest_catalog->base_uri, "glue")) {
 		auto &sigv4 = rest_catalog->auth_handler->Cast<SIGV4Authorization>();
 		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);

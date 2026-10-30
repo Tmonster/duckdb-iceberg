@@ -1,5 +1,6 @@
 #include "catalog/transaction/iceberg_transaction_data.hpp"
 
+#include "catalog/iceberg_catalog.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
@@ -325,7 +326,7 @@ void IcebergTransactionData::TableAddAssertCreate() {
 	requirements.push_back(make_uniq<AssertCreateRequirement>());
 	auto alter_update = transaction.GetAlterUpdate();
 	D_ASSERT(alter_update);
-	transaction.VerifyAlterUpdateAtomicity(*alter_update);
+	transaction.GetCatalog().VerifyTableUpdates(*alter_update);
 }
 
 void IcebergTransactionData::TableAddAssertUUID() {

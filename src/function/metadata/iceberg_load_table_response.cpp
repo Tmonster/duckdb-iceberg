@@ -22,10 +22,10 @@ namespace duckdb {
 
 struct IcebergLoadTableResponseBindData : public TableFunctionData {
 	IcebergTableSchemaVersion &table_entry;
-	IcebergCatalog &ic_catalog;
+	IcebergRestCatalog &ic_catalog;
 	IcebergSchemaEntry &ic_schema;
 
-	IcebergLoadTableResponseBindData(IcebergTableSchemaVersion &table_entry, IcebergCatalog &ic_catalog,
+	IcebergLoadTableResponseBindData(IcebergTableSchemaVersion &table_entry, IcebergRestCatalog &ic_catalog,
 	                                 IcebergSchemaEntry &ic_schema)
 	    : table_entry(table_entry), ic_catalog(ic_catalog), ic_schema(ic_schema) {
 	}
@@ -40,7 +40,7 @@ struct IcebergLoadTableResponseGlobalState : public GlobalTableFunctionState {
 };
 
 static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const IcebergLoadTableResponseBindData &bind_data) {
-	auto &ic_catalog = bind_data.ic_catalog.AsRest("iceberg_load_table_response");
+	auto &ic_catalog = bind_data.ic_catalog;
 	auto &ic_schema = bind_data.ic_schema;
 	auto &ic_table_entry = bind_data.table_entry;
 
@@ -81,7 +81,11 @@ static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &cont
 	}
 
 	auto &table_entry = catalog_entry->Cast<IcebergTableSchemaVersion>();
-	auto &ic_catalog = table_entry.catalog.Cast<IcebergCatalog>();
+	auto &iceberg_catalog = table_entry.catalog.Cast<IcebergCatalog>();
+	if (iceberg_catalog.GetIcebergCatalogType() != IcebergCatalogType::REST) {
+		throw InvalidInputException("Table '%s' is not an Iceberg REST catalog table", input_string);
+	}
+	auto &ic_catalog = iceberg_catalog.Cast<IcebergRestCatalog>();
 	auto &ic_schema = table_entry.schema.Cast<IcebergSchemaEntry>();
 
 	auto ret = make_uniq<IcebergLoadTableResponseBindData>(table_entry, ic_catalog, ic_schema);

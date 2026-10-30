@@ -176,7 +176,7 @@ void IcebergRestTransactionCommit::DoTableUpdates(IcebergTransactionAlterUpdate 
 	if (!alter_update.HasUpdates()) {
 		return;
 	}
-	if (transaction.CanUseMultiTableCommit(alter_update)) {
+	if (catalog.CanUseMultiTableCommit(alter_update)) {
 		DoMultiTableCommitUpdates(alter_update, context);
 	} else {
 		DoSingleTableCommitUpdates(alter_update, context);

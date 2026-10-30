@@ -107,11 +107,11 @@ void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
 	tables.erase(it);
 }
 
-IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode, IcebergAttachOptions &attach_options_p,
-                               const optional<Identifier> &default_schema)
+IcebergCatalog::IcebergCatalog(IcebergCatalogType catalog_type_p, AttachedDatabase &db_p, AccessMode access_mode,
+                               IcebergAttachOptions &attach_options_p, const optional<Identifier> &default_schema)
     : Catalog(db_p), access_mode(access_mode), attach_options(attach_options_p), default_schema(default_schema),
       attach_path(attach_options.warehouse), warehouse(attach_options.warehouse), schemas(*this),
-      table_request_cache(attach_options) {
+      table_request_cache(attach_options), catalog_type(catalog_type_p) {
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
@@ -287,14 +287,6 @@ unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context,
 	throw InvalidConfigurationException("Could not find a valid storage secret (s3 or aws)");
 }
 
-IcebergRestCatalog &IcebergCatalog::AsRest(const string &operation) {
-	auto rest_catalog = TryAsRest();
-	if (!rest_catalog) {
-		throw NotImplementedException("%s is only supported for Iceberg REST catalogs", operation);
-	}
-	return *rest_catalog;
-}
-
 IcebergSchemaSet &IcebergCatalog::GetSchemas() {
 	return schemas;
 }
@@ -337,6 +329,29 @@ unique_ptr<SecretEntry> IcebergCatalog::GetHTTPSecret(ClientContext &context, co
 	secret_entry = std::move(secret_match.secret_entry);
 	return secret_entry;
 }
+IcebergTable &IcebergCatalog::AddCreatedTable(ClientContext &context, IcebergTable &&table) {
+	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
+	auto key = table.GetTableKey();
+	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
+	return alter_update.CreateTable(key, std::move(table));
+}
+
+void IcebergCatalog::AddCreateTableUpdates(ClientContext &context, IcebergTable &table_info) {
+	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
+	auto &transaction_data = table_info.GetOrCreateTransactionData(iceberg_transaction);
+	transaction_data.TableAssignUUID();
+	transaction_data.TableAddUpradeFormatVersion();
+	transaction_data.TableAddSchema(0);
+	transaction_data.TableAddPartitionSpec();
+	transaction_data.TableSetDefaultSpec();
+	transaction_data.TableAddSortOrder();
+	transaction_data.TableSetDefaultSortOrder();
+	transaction_data.TableSetLocation();
+	transaction_data.TableSetProperties(table_info.table_metadata.table_properties);
+
+	iceberg_transaction.SetLatestTableState(table_info.GetTableKey(), IcebergTableStatus::ALIVE);
+}
+
 //===--------------------------------------------------------------------===//
 // Catalog requests
 //===--------------------------------------------------------------------===//

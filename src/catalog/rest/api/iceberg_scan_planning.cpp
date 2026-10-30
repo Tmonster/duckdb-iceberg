@@ -73,12 +73,8 @@ struct PlanningAccumulator {
 	PlanTasksContainer plan_tasks;
 };
 
-static IcebergRestCatalog &PlanningCatalog(IcebergTable &table_info) {
-	return table_info.catalog.AsRest("Server-side scan planning");
-}
-
 static IRCEndpointBuilder TableEndpoint(IcebergTable &table_info) {
-	auto &catalog = PlanningCatalog(table_info);
+	auto &catalog = table_info.catalog.Cast<IcebergRestCatalog>();
 	auto result = catalog.GetBaseUrl();
 	result.AddPrefixComponents(catalog.prefix);
 	result.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
@@ -315,7 +311,7 @@ static void FetchPlanTasks(ClientContext &context, IcebergTable &table_info, Pla
 		auto headers = PlanningHeaders(context);
 		headers.Insert("Idempotency-Key", UUID::ToString(UUID::GenerateRandomUUID()));
 		auto response =
-		    PlanningCatalog(table_info).auth_handler->Request(RequestType::POST_REQUEST, context, endpoint, headers, body);
+		    table_info.catalog.Cast<IcebergRestCatalog>().auth_handler->Request(RequestType::POST_REQUEST, context, endpoint, headers, body);
 		if (response->status != HTTPStatusCode::OK_200) {
 			ThrowResponseError(endpoint, *response);
 		}
@@ -328,8 +324,8 @@ static void FetchPlanTasks(ClientContext &context, IcebergTable &table_info, Pla
 static void FetchCredentials(ClientContext &context, IcebergTable &table_info, const optional<string> &plan_id,
                              IcebergServerSideScanPlan &result) {
 	if (!result.storage_credentials.empty() ||
-	    PlanningCatalog(table_info).supported_urls.find(IcebergServerSideScanPlanning::CREDENTIALS_ENDPOINT) ==
-	        PlanningCatalog(table_info).supported_urls.end()) {
+	    table_info.catalog.Cast<IcebergRestCatalog>().supported_urls.find(IcebergServerSideScanPlanning::CREDENTIALS_ENDPOINT) ==
+	        table_info.catalog.Cast<IcebergRestCatalog>().supported_urls.end()) {
 		return;
 	}
 	if (context.IsInterrupted()) {
@@ -342,7 +338,7 @@ static void FetchCredentials(ClientContext &context, IcebergTable &table_info, c
 		endpoint.SetParam("planId", IRCPathComponent::RegularComponent(*plan_id));
 	}
 	auto headers = PlanningHeaders(context);
-	auto response = PlanningCatalog(table_info).auth_handler->Request(RequestType::GET_REQUEST, context, endpoint, headers);
+	auto response = table_info.catalog.Cast<IcebergRestCatalog>().auth_handler->Request(RequestType::GET_REQUEST, context, endpoint, headers);
 	if (response->status != HTTPStatusCode::OK_200) {
 		ThrowResponseError(endpoint, *response);
 	}
@@ -424,7 +420,7 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 	auto body = SerializePlanRequest(request);
 	ICUtils::LogPostBody(context, endpoint, body);
 	auto response =
-	    PlanningCatalog(table_info).auth_handler->Request(RequestType::POST_REQUEST, context, endpoint, headers, body);
+	    table_info.catalog.Cast<IcebergRestCatalog>().auth_handler->Request(RequestType::POST_REQUEST, context, endpoint, headers, body);
 	if (response->status == HTTPStatusCode::NotAcceptable_406) {
 		return false;
 	}
@@ -477,7 +473,7 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 			endpoint.AddPathComponent(IRCPathComponent::RegularComponent(*active_plan_id));
 			auto poll_headers = PlanningHeaders(context);
 			response =
-			    PlanningCatalog(table_info).auth_handler->Request(RequestType::GET_REQUEST, context, endpoint, poll_headers);
+			    table_info.catalog.Cast<IcebergRestCatalog>().auth_handler->Request(RequestType::GET_REQUEST, context, endpoint, poll_headers);
 			if (response->status != HTTPStatusCode::OK_200) {
 				ThrowResponseError(endpoint, *response);
 			}
@@ -518,7 +514,7 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 				cancel_endpoint.AddPathComponent(IRCPathComponent::RegularComponent(*active_plan_id));
 				auto cancel_headers = PlanningHeaders(context);
 				cancel_headers.Insert("Idempotency-Key", UUID::ToString(UUID::GenerateRandomUUID()));
-				PlanningCatalog(table_info).auth_handler->Request(RequestType::DELETE_REQUEST, context, cancel_endpoint,
+				table_info.catalog.Cast<IcebergRestCatalog>().auth_handler->Request(RequestType::DELETE_REQUEST, context, cancel_endpoint,
 				                                         cancel_headers);
 			} catch (std::exception &e) {
 				auto error = ErrorData(e);

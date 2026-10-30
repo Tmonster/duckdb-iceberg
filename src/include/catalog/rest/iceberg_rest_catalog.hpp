@@ -13,6 +13,9 @@ class CatalogConfig;
 //! An Iceberg catalog managed by an Iceberg REST Catalog server
 class IcebergRestCatalog : public IcebergCatalog {
 public:
+	static constexpr const IcebergCatalogType TYPE = IcebergCatalogType::REST;
+
+public:
 	explicit IcebergRestCatalog(AttachedDatabase &db_p, AccessMode access_mode,
 	                            unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
 	                            const optional<Identifier> &default_schema);
@@ -40,13 +43,16 @@ public:
 	IcebergListViewsResult ListViews(ClientContext &context, const vector<string> &namespace_items) override;
 	IcebergLoadViewResult LoadView(ClientContext &context, const vector<string> &namespace_items,
 	                               const string &view_name) override;
-	rest_api_objects::LoadTableResult PrepareCreateTable(ClientContext &context, const vector<string> &namespace_items,
-	                                                     const IcebergCreateTableRequest &request) override;
-	bool SupportsMultiTableCommit() const override;
+	IcebergTable &CreateTable(ClientContext &context, IcebergSchemaEntry &schema,
+	                          const IcebergCreateTableRequest &request) override;
+	void VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const override;
 	void Commit(IcebergTransaction &transaction) override;
-	optional_ptr<IcebergRestCatalog> TryAsRest() override {
-		return this;
-	}
+
+public:
+	//! Whether the server supports atomic multi-table commits, and they are not disabled
+	bool MultiTableCommitAvailable() const;
+	//! Whether the table updates of 'alter_update' can be sent as one atomic multi-table commit
+	bool CanUseMultiTableCommit(const IcebergTransactionAlterUpdate &alter_update) const;
 
 public:
 	unique_ptr<IcebergAuthorization> auth_handler;

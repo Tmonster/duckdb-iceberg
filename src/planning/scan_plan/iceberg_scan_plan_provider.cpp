@@ -65,8 +65,9 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 	unique_ptr<IcebergScanPlanProvider> provider;
 	if (server_side_planning_enabled) {
 		auto &table_info = table_entry->table_info;
-		auto rest_catalog = table_info.catalog.TryAsRest();
-		if (rest_catalog && rest_catalog->supported_urls.count(IcebergServerSideScanPlanning::PLAN_ENDPOINT)) {
+		auto &catalog = table_info.catalog;
+		if (catalog.GetIcebergCatalogType() == IcebergCatalogType::REST &&
+		    catalog.Cast<IcebergRestCatalog>().supported_urls.count(IcebergServerSideScanPlanning::PLAN_ENDPOINT)) {
 			rest_api_objects::PlanTableScanRequest request;
 			request.snapshot_id = context.snapshot.snapshot->snapshot_id;
 			request.case_sensitive = true;

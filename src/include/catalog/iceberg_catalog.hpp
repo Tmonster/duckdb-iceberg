@@ -19,8 +19,8 @@ namespace duckdb {
 
 class IcebergSchemaEntry;
 struct IcebergTable;
-class IcebergRestCatalog;
 class IcebergTransaction;
+struct IcebergTransactionAlterUpdate;
 struct IcebergCreateTableRequest;
 
 class MetadataCacheValue {
@@ -111,16 +111,46 @@ private:
 //! Which kinds of view operations a catalog supports
 enum class IcebergViewOperation : uint8_t { LIST, LOAD, CREATE };
 
+//! The kind of service that manages an Iceberg catalog's state
+enum class IcebergCatalogType : uint8_t {
+	//! Not a concrete catalog type, Cast<T> accepts any catalog type for it
+	INVALID = 0,
+	//! An Iceberg REST Catalog server
+	REST = 1
+};
+
 //! Base class of all Iceberg catalogs. It implements the DuckDB Catalog interface, planning and the
 //! transaction-local state on top of a small set of hooks that each catalog type implements:
 //! - Reads, called lazily while a transaction runs (schemas, tables, views).
-//! - PrepareCreateTable, called when a CREATE TABLE statement is executed.
+//! - CreateTable and VerifyTableUpdates, called while statements execute.
 //! - Commit, called once with all of a transaction's buffered changes.
 class IcebergCatalog : public Catalog {
 public:
-	explicit IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode, IcebergAttachOptions &attach_options,
-	                        const optional<Identifier> &default_schema);
+	static constexpr const IcebergCatalogType TYPE = IcebergCatalogType::INVALID;
+
+public:
+	explicit IcebergCatalog(IcebergCatalogType catalog_type, AttachedDatabase &db_p, AccessMode access_mode,
+	                        IcebergAttachOptions &attach_options, const optional<Identifier> &default_schema);
 	~IcebergCatalog() override;
+
+public:
+	IcebergCatalogType GetIcebergCatalogType() const {
+		return catalog_type;
+	}
+	template <class TARGET>
+	TARGET &Cast() {
+		if (TARGET::TYPE != IcebergCatalogType::INVALID && catalog_type != TARGET::TYPE) {
+			throw InternalException("Failed to cast Iceberg catalog to type - Iceberg catalog type mismatch");
+		}
+		return reinterpret_cast<TARGET &>(*this);
+	}
+	template <class TARGET>
+	const TARGET &Cast() const {
+		if (TARGET::TYPE != IcebergCatalogType::INVALID && catalog_type != TARGET::TYPE) {
+			throw InternalException("Failed to cast Iceberg catalog to type - Iceberg catalog type mismatch");
+		}
+		return reinterpret_cast<const TARGET &>(*this);
+	}
 
 public:
 	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
@@ -208,28 +238,28 @@ public:
 	//===--------------------------------------------------------------------===//
 	// Catalog type hooks: statement time
 	//===--------------------------------------------------------------------===//
-	//! Returns the initial state (location, metadata) of a table created by this transaction.
-	//! Publishing the table to the catalog happens at commit.
-	virtual rest_api_objects::LoadTableResult PrepareCreateTable(ClientContext &context,
-	                                                             const vector<string> &namespace_items,
-	                                                             const IcebergCreateTableRequest &request) = 0;
+	//! Add the table described by 'request' to the current transaction, with the updates that create it at commit
+	virtual IcebergTable &CreateTable(ClientContext &context, IcebergSchemaEntry &schema,
+	                                  const IcebergCreateTableRequest &request) = 0;
+	//! Throws if the catalog cannot commit the table updates of 'alter_update' atomically
+	virtual void VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const {
+	}
 
 	//===--------------------------------------------------------------------===//
 	// Catalog type hooks: commit
 	//===--------------------------------------------------------------------===//
-	//! Whether table updates to multiple tables can be committed atomically
-	virtual bool SupportsMultiTableCommit() const = 0;
 	//! Publish all changes buffered by 'transaction'. Only called for transactions that changed something.
 	virtual void Commit(IcebergTransaction &transaction) = 0;
 
-	//===--------------------------------------------------------------------===//
-	// REST-only functionality
-	//===--------------------------------------------------------------------===//
-	virtual optional_ptr<IcebergRestCatalog> TryAsRest() {
-		return nullptr;
-	}
-	//! Throws if this is not a REST catalog
-	IcebergRestCatalog &AsRest(const string &operation);
+protected:
+	//! Register a table created by the current transaction
+	IcebergTable &AddCreatedTable(ClientContext &context, IcebergTable &&table);
+	//! Add the updates that create 'table_info' at commit: its uuid, format version, schema, partition spec,
+	//! sort order, location and properties
+	void AddCreateTableUpdates(ClientContext &context, IcebergTable &table_info);
+
+private:
+	const IcebergCatalogType catalog_type;
 
 public:
 	AccessMode access_mode;

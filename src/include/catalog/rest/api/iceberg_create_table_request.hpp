@@ -31,6 +31,9 @@ public:
 	CreateIcebergSchema(ClientContext &context, const IcebergTableMetadata &table_metadata, const ColumnList &columns,
 	                    optional_ptr<const vector<unique_ptr<Constraint>>> constraints, int32_t &last_column_id);
 	string CreateTableToJSON(bool stage_create) const;
+	const string &GetName() const {
+		return name;
+	}
 	static void PopulateSchema(JSONWriter &writer, JSONMutableValue schema_json, const IcebergTableSchema &schema);
 
 private:
