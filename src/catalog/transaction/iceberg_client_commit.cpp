@@ -20,8 +20,9 @@ constexpr int32_t UNPARTITIONED_LAST_PARTITION_ID = 999;
 constexpr const char *PREVIOUS_VERSIONS_MAX = "write.metadata.previous-versions-max";
 constexpr idx_t DEFAULT_PREVIOUS_VERSIONS_MAX = 100;
 
+//! A requirement that no longer holds means another commit changed the table first
 [[noreturn]] void RequirementFailed(const string &message) {
-	throw TransactionException("Iceberg commit requirement failed: %s", message);
+	throw TransactionException("Conflict with a concurrent Iceberg commit, requirement failed: %s", message);
 }
 
 int32_t MaxFieldId(const vector<unique_ptr<IcebergColumnDefinition>> &columns) {
@@ -269,6 +270,36 @@ void ApplyUpdate(IcebergTableMetadata &metadata, const rest_api_objects::TableUp
 	}
 }
 
+//! Like a catalog server, reject metadata whose current partition spec or sort order refers to a column that is not
+//! in the current schema, e.g. after a concurrent commit partitioned the table by a column this commit drops
+void ValidateMetadata(const IcebergTableMetadata &metadata) {
+	auto &schema = metadata.GetSchemaFromId(metadata.GetCurrentSchemaId());
+	auto check_source = [&](uint64_t source_id, const IcebergTransform &transform, const char *kind, int64_t id) {
+		if (transform.RawType() == "void") {
+			return;
+		}
+		if (!schema.TryGetColumnByFieldId(source_id)) {
+			throw InvalidInputException("Cannot commit table metadata: the default %s %d refers to field %d, which is "
+			                            "not in the current schema",
+			                            kind, id, source_id);
+		}
+	};
+	auto spec = metadata.partition_specs.find(metadata.default_spec_id);
+	if (spec != metadata.partition_specs.end()) {
+		for (auto &field : spec->second.fields) {
+			check_source(field.source_id, field.transform, "partition spec", spec->first);
+		}
+	}
+	if (metadata.default_sort_order_id.IsValid()) {
+		auto sort_order = metadata.sort_specs.find(NumericCast<int32_t>(metadata.default_sort_order_id.GetIndex()));
+		if (sort_order != metadata.sort_specs.end()) {
+			for (auto &field : sort_order->second.fields) {
+				check_source(NumericCast<uint64_t>(field.source_id), field.transform, "sort order", sort_order->first);
+			}
+		}
+	}
+}
+
 } // namespace
 
 void IcebergClientCommit::CheckRequirements(optional_ptr<const IcebergTableMetadata> base,
@@ -386,6 +417,7 @@ IcebergTableMetadata IcebergClientCommit::Apply(optional_ptr<const IcebergTableM
 		}
 	}
 	result.last_updated_ms = last_updated;
+	ValidateMetadata(result);
 	return result;
 }
 
