@@ -16,6 +16,7 @@ string IcebergLogType::Redact(ClientContext &context, const vector<string> &scop
 	if (Settings::Get<RedactHttpLogsSetting>(context)) {
 		return scopes.empty() ? string() : HTTPLogType::REDACTED_VALUE;
 	}
+	idx_t my_new_change = 0;
 	return StringUtil::Join(scopes, ", ");
 }
 
