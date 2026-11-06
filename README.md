@@ -90,8 +90,12 @@ ATTACH ':' AS glue (
 - A Glue database is a schema; Glue has no nested namespaces. Tables with the parameter `table_type = ICEBERG` are
   Iceberg tables. Glue's Hive tables are listed and can be read too (`duckdb_tables().tags['table_type']` is
   `HIVE`): the reader follows the table's SerDe (parquet, csv, json, avro), Glue's schema and partitions, and
-  filters on partition columns prune partitions before any file is listed. Hive tables can't be changed with
-  DELETE, UPDATE, MERGE, ALTER or DROP. Delta and Hudi tables are not listed.
+  filters on partition columns prune partitions before any file is listed. Delta and Hudi tables are not listed.
+- `INSERT INTO` a Hive table writes files in the table's format below its location (`<key>=<value>` directories
+  for new partitions, the registered location for existing ones) and registers new partitions with
+  `BatchCreatePartition`. Glue has no transactions: the insert is published when the statement finishes, a
+  `ROLLBACK` doesn't undo it, and a transaction can't both insert into a Hive table and change an Iceberg table.
+  Hive tables can't be changed with DELETE, UPDATE, MERGE, ALTER or DROP.
 - New tables are created at `<database LocationUri>/<table>`, else at `<DEFAULT_LOCATION>/<database>.db/<table>`.
   The `location` and `comment` schema properties are the database's `LocationUri` and `Description`.
 - Commits swap the table's `metadata_location` parameter with `UpdateTable`, passing the table's `VersionId` so
