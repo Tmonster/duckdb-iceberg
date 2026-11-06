@@ -2,7 +2,7 @@
 
 #include "duckdb/main/connection.hpp"
 
-#include "catalog/iceberg_catalog.hpp"
+#include "catalog/metastore/iceberg_metastore_catalog.hpp"
 
 namespace duckdb {
 
@@ -21,8 +21,8 @@ struct IcebergSqlCatalogUri {
 
 //! An Iceberg catalog stored in the tables of a SQL database, compatible with the JDBC catalog of Iceberg Java and
 //! the SqlCatalog of PyIceberg. The database only stores a pointer to each table's current metadata file: DuckDB
-//! writes the metadata files itself (see IcebergClientCommit) and swaps the pointers in one SQL transaction.
-class IcebergSqlCatalog : public IcebergCatalog {
+//! writes the metadata files itself and swaps the pointers in one SQL transaction (see IcebergSqlMetastoreCommit).
+class IcebergSqlCatalog : public IcebergMetastoreCatalog {
 public:
 	static constexpr const IcebergCatalogType TYPE = IcebergCatalogType::SQL;
 	static constexpr const char *TABLES_TABLE = "iceberg_tables";
@@ -43,15 +43,17 @@ public:
 	LoadSchemaProperties(ClientContext &context, const IcebergSchemaEntry &schema) override;
 	IcebergListTablesResult ListTables(ClientContext &context, const vector<string> &namespace_items,
 	                                   bool allow_forbidden) override;
-	IcebergLoadTableResult LoadTable(ClientContext &context, const vector<string> &namespace_items,
-	                                 const string &table_name) override;
 	bool SupportsViews(IcebergViewOperation operation) const override;
 	IcebergListViewsResult ListViews(ClientContext &context, const vector<string> &namespace_items) override;
-	IcebergLoadViewResult LoadView(ClientContext &context, const vector<string> &namespace_items,
-	                               const string &view_name) override;
-	IcebergTable &CreateTable(ClientContext &context, IcebergSchemaEntry &schema,
-	                          const IcebergCreateTableRequest &request) override;
-	void Commit(IcebergTransaction &transaction) override;
+
+	string MetastoreName() const override {
+		return "SQL catalog";
+	}
+	string GetMetadataLocation(ClientContext &context, const IcebergMetastoreIdentifier &identifier,
+	                           IcebergMetastoreEntryType type) override;
+	string DefaultTableLocation(ClientContext &context, const vector<string> &namespace_items,
+	                            const string &table_name) override;
+	unique_ptr<IcebergMetastoreCommit> BeginCommit(ClientContext &context) override;
 
 public:
 	//! Attach the catalog database (once) and create the catalog tables if requested
@@ -67,9 +69,6 @@ public:
 	const string &GetCatalogName() const {
 		return catalog_name;
 	}
-	//! The location for a new table that doesn't request one
-	string DefaultTableLocation(ClientContext &context, const vector<string> &namespace_items,
-	                            const string &table_name);
 	//! '<warehouse>/<namespace levels>', where tables of a namespace without a 'location' property are created
 	string DefaultNamespaceLocation(const vector<string> &namespace_items) const;
 	//! The 'iceberg_type' column was added to iceberg_tables by the V1 schema of the JDBC catalog

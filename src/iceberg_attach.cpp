@@ -2,6 +2,7 @@
 #include "catalog/rest/iceberg_rest_catalog.hpp"
 #include "catalog/sql/iceberg_sql_catalog.hpp"
 #include "catalog/filesystem/iceberg_filesystem_catalog.hpp"
+#include "catalog/glue/iceberg_glue_catalog.hpp"
 
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
@@ -500,6 +501,56 @@ static unique_ptr<Catalog> FilesystemCatalogAttach(ClientContext &context, Attac
 	return std::move(catalog);
 }
 
+static unique_ptr<Catalog> GlueCatalogAttach(ClientContext &context, AttachedDatabase &db, const string &name,
+                                             AttachInfo &info, AttachOptions &options) {
+	IcebergAttachOptions attach_options;
+	attach_options.name = name;
+	attach_options.access_mode = IRCAccessDelegationMode::NONE;
+	optional<Identifier> default_schema;
+	IcebergGlueClientOptions client_options;
+	// Like the aws_glue extension: the ATTACH path is the Glue catalog id, ':' (or empty) for the account's default
+	if (info.path != ":") {
+		client_options.catalog_id = info.path;
+	}
+
+	unordered_map<string, Value> generic_options;
+	for (auto &entry : NormalizeIcebergAttachOptions(info.options)) {
+		auto &option = entry.first;
+		if (option == "type" || option == "read_only" || option == "catalog_type") {
+			continue;
+		}
+		if (option == "region") {
+			client_options.region = entry.second.ToString();
+		} else if (option == "endpoint" || option == "uri") {
+			// NormalizeIcebergAttachOptions spells 'endpoint' as 'uri'
+			client_options.endpoint = entry.second.ToString();
+		} else if (option == "secret") {
+			client_options.secret_name = StringUtil::Lower(entry.second.ToString());
+		} else if (option == "default_location" || option == "warehouse") {
+			attach_options.warehouse = entry.second.ToString();
+			StringUtil::RTrim(attach_options.warehouse, "/");
+		} else if (std::find_if(std::begin(SQL_CATALOG_GENERIC_OPTIONS), std::end(SQL_CATALOG_GENERIC_OPTIONS),
+		                        [&](const char *generic) { return option == generic; }) !=
+		           std::end(SQL_CATALOG_GENERIC_OPTIONS)) {
+			generic_options.emplace(entry);
+		} else {
+			throw InvalidConfigurationException(
+			    "Unsupported option '%s' for an Iceberg Glue catalog (CATALOG_TYPE 'glue')", option);
+		}
+	}
+	ParseAttachOptions(attach_options, default_schema, generic_options);
+
+	auto catalog = make_uniq<IcebergGlueCatalog>(db, options.access_mode, attach_options, default_schema,
+	                                             std::move(client_options));
+	catalog->SetAttachOptions(options.options);
+	if (default_schema && !catalog->SchemaExists(context, default_schema->GetIdentifierName())) {
+		throw InvalidConfigurationException(
+		    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach",
+		    default_schema->GetIdentifierName());
+	}
+	return std::move(catalog);
+}
+
 } // namespace
 
 unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
@@ -518,12 +569,15 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	if (catalog_type == "sql" || catalog_type == "jdbc") {
 		return SqlCatalogAttach(context, db, name, info, options);
 	}
+	if (catalog_type == "glue") {
+		return GlueCatalogAttach(context, db, name, info, options);
+	}
 	if (catalog_type == "filesystem" || catalog_type == "file_system" || catalog_type == "hadoop") {
 		return FilesystemCatalogAttach(context, db, name, info, options);
 	}
 	if (catalog_type != "rest") {
 		throw InvalidConfigurationException(
-		    "Unrecognized 'catalog_type' (%s), accepted options are: rest, sql, filesystem", catalog_type);
+		    "Unrecognized 'catalog_type' (%s), accepted options are: rest, sql, glue, filesystem", catalog_type);
 	}
 
 	IcebergAttachOptions attach_options;

@@ -119,8 +119,10 @@ enum class IcebergCatalogType : uint8_t {
 	REST = 1,
 	//! A SQL database holding the Iceberg JDBC catalog tables (iceberg_tables, iceberg_namespace_properties)
 	SQL = 2,
+	//! The AWS Glue Data Catalog, through the Glue API
+	GLUE = 3,
 	//! A directory tree in the layout of the Hadoop catalog, without a catalog service
-	FILESYSTEM = 3
+	FILESYSTEM = 4
 };
 
 //! Base class of all Iceberg catalogs. It implements the DuckDB Catalog interface, planning and the

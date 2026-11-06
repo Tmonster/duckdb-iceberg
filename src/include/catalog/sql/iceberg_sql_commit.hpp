@@ -1,52 +1,50 @@
 #pragma once
 
-#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection.hpp"
+
+#include "catalog/metastore/iceberg_metastore_catalog.hpp"
 
 namespace duckdb {
 
 class IcebergSqlCatalog;
-class IcebergTransaction;
-struct IcebergTransactionAlterUpdate;
-struct IcebergTransactionDeleteUpdate;
-struct IcebergTransactionRenameUpdate;
-struct IcebergRetryConfig;
 
-//! Publishes a transaction's buffered changes to an Iceberg SQL catalog. Unlike the REST protocol, a SQL database
-//! has transactions, so all schema and table changes of a DuckDB transaction are written atomically: every table
-//! commit writes a new metadata file (see IcebergClientCommit) and swaps the table's pointer with
+//! A commit attempt on an Iceberg SQL catalog. A SQL database has transactions, so all schema and table changes of a
+//! DuckDB transaction are written in one SQL transaction: a table's pointer is swapped with
 //! 'UPDATE ... WHERE metadata_location = <the metadata the commit is based on>'.
-class IcebergSqlTransactionCommit {
+class IcebergSqlMetastoreCommit : public IcebergMetastoreCommit {
 public:
-	IcebergSqlTransactionCommit(IcebergSqlCatalog &catalog, IcebergTransaction &transaction);
+	IcebergSqlMetastoreCommit(IcebergSqlCatalog &catalog, unique_ptr<Connection> connection);
+	~IcebergSqlMetastoreCommit() override;
 
 public:
-	void Commit();
+	bool IsAtomic() const override {
+		return true;
+	}
+	bool NamespaceExists(const vector<string> &namespace_items) override;
+	void CreateNamespace(const vector<string> &namespace_items) override;
+	void UpdateNamespaceProperties(const vector<string> &namespace_items, const set<string> &removals,
+	                               const case_insensitive_map_t<string> &updates) override;
+	void DropNamespace(const vector<string> &namespace_items) override;
+	string LoadMetadataLocation(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type) override;
+	void CreateEntry(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type,
+	                 const string &metadata_location, optional_ptr<const IcebergTableMetadata> metadata) override;
+	void SwapMetadataLocation(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type,
+	                          const string &base_location, const string &new_location,
+	                          optional_ptr<const IcebergTableMetadata> metadata) override;
+	void DropEntry(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type,
+	               optional_ptr<const IcebergTableMetadata> metadata) override;
+	void RenameEntry(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type,
+	                 const string &new_name) override;
+	void Finish() override;
+	void Abort() override;
 
 private:
-	void CommitWithRetries(ClientContext &context);
-	void WriteSchemaCreates(Connection &connection);
-	void WriteSchemaPropertyUpdates(Connection &connection);
-	void WriteTableUpdates(Connection &connection, IcebergTransactionAlterUpdate &alter_update, ClientContext &context,
-	                       IcebergRetryConfig &retry_config, bool &retryable, unordered_set<string> &table_keys);
-	void WriteTableDelete(Connection &connection, IcebergTransactionDeleteUpdate &delete_update,
-	                      ClientContext &context);
-	void WriteTableRename(Connection &connection, IcebergTransactionRenameUpdate &rename_update,
-	                      ClientContext &context);
-	void WriteViewDeletes(Connection &connection);
-	void WriteViewCreates(Connection &connection, ClientContext &context);
-	void WriteSchemaDeletes(Connection &connection);
-	//! Remove the metadata files written by a commit attempt that did not succeed
-	void RemoveWrittenFiles(ClientContext &context);
+	//! The 'iceberg_type' condition for 'type', empty for catalogs with the V0 schema
+	string TypeCondition(IcebergMetastoreEntryType type) const;
 
 private:
 	IcebergSqlCatalog &catalog;
-	IcebergTransaction &transaction;
-	DatabaseInstance &db;
-	//! Metadata files (manifests, manifest lists, metadata.json) written by the current attempt
-	vector<string> written_files;
-	//! Updates of the in-memory catalog state, applied once the SQL transaction committed
-	vector<std::function<void()>> on_commit;
+	unique_ptr<Connection> connection;
 };
 
 } // namespace duckdb

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "catalog/iceberg_catalog.hpp"
+#include "catalog/metastore/iceberg_metastore_catalog.hpp"
 
 namespace duckdb {
 
@@ -8,11 +8,11 @@ namespace duckdb {
 //! '<warehouse>/<namespace levels>/<table>/metadata/v<N>.metadata.json', with 'version-hint.text' holding the current
 //! version N. A directory is a table if it has a 'metadata' directory, and a namespace otherwise.
 //!
-//! There is no catalog service: DuckDB writes the metadata files itself (see IcebergClientCommit). A commit creates
-//! the next version's file exclusively, so a concurrent commit of the same version fails. Without a way to publish
-//! several files atomically, a transaction can only change one table, and namespace changes are applied one after
-//! another. The catalog is meant for a single writer.
-class IcebergFilesystemCatalog : public IcebergCatalog {
+//! There is no catalog service: DuckDB writes the metadata files itself, and a table's newest metadata file is its
+//! pointer (see IcebergMetastoreCatalog). A commit creates the next version's file exclusively, so a concurrent commit
+//! of the same version fails. Without a way to publish several files atomically, a transaction can only change one
+//! table, and namespace changes are applied one after another. The catalog is meant for a single writer.
+class IcebergFilesystemCatalog : public IcebergMetastoreCatalog {
 public:
 	static constexpr const IcebergCatalogType TYPE = IcebergCatalogType::FILESYSTEM;
 	static constexpr const char *VERSION_HINT_FILE = "version-hint.text";
@@ -29,16 +29,28 @@ public:
 	LoadSchemaProperties(ClientContext &context, const IcebergSchemaEntry &schema) override;
 	IcebergListTablesResult ListTables(ClientContext &context, const vector<string> &namespace_items,
 	                                   bool allow_forbidden) override;
-	IcebergLoadTableResult LoadTable(ClientContext &context, const vector<string> &namespace_items,
-	                                 const string &table_name) override;
 	bool SupportsViews(IcebergViewOperation operation) const override;
 	IcebergListViewsResult ListViews(ClientContext &context, const vector<string> &namespace_items) override;
-	IcebergLoadViewResult LoadView(ClientContext &context, const vector<string> &namespace_items,
-	                               const string &view_name) override;
 	IcebergTable &CreateTable(ClientContext &context, IcebergSchemaEntry &schema,
 	                          const IcebergCreateTableRequest &request) override;
 	void VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const override;
-	void Commit(IcebergTransaction &transaction) override;
+
+	string MetastoreName() const override {
+		return "filesystem catalog";
+	}
+	string GetMetadataLocation(ClientContext &context, const IcebergMetastoreIdentifier &identifier,
+	                           IcebergMetastoreEntryType type) override;
+	string DefaultTableLocation(ClientContext &context, const vector<string> &namespace_items,
+	                            const string &table_name) override;
+	unique_ptr<IcebergMetastoreCommit> BeginCommit(ClientContext &context) override;
+	//! Creates 'v<N>.metadata.json' of the next version exclusively: that is the commit
+	string WriteTableMetadata(ClientContext &context, IcebergMetastoreCommit &commit,
+	                          const IcebergMetastoreIdentifier &identifier, IcebergTableMetadata &metadata,
+	                          optional_ptr<const IcebergTableMetadata> base, const string &base_location) override;
+	//! A dropped table's directory is removed when it is dropped
+	string PurgeLocation(const IcebergTable &table) const override {
+		return string();
+	}
 
 public:
 	//! '<warehouse>/<namespace levels>'
@@ -52,8 +64,6 @@ public:
 	//! The current version of a table: the version in its hint, or a newer one a commit wrote without updating the
 	//! hint. Unset if the table has no metadata file.
 	static optional_idx CurrentVersion(FileSystem &fs, const string &table_directory);
-	//! Whether 'location' is inside the warehouse
-	bool InWarehouse(const string &location) const;
 
 private:
 	//! The subdirectories of 'directory'

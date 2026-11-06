@@ -1,0 +1,71 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/glue/attach.test
+# description: ATTACH options of the Iceberg Glue catalog, and tables persisting across attaches
+# group: [glue]
+
+require-env CATALOG_TEST_CONFIG_SETUP glue
+
+include test/sql/init_requires
+
+# REST options don't apply to a Glue catalog
+statement error
+ATTACH ':' AS rest_option (TYPE ICEBERG, CATALOG_TYPE 'glue', ENDPOINT 'http://127.0.0.1:5055', CLIENT_ID 'admin');
+----
+Unsupported option 'client_id' for an Iceberg Glue catalog
+
+statement error
+ATTACH ':' AS bad_type (TYPE ICEBERG, CATALOG_TYPE 'hive');
+----
+Unrecognized 'catalog_type' (hive), accepted options are: rest, sql, glue, filesystem
+
+statement error
+ATTACH ':' AS missing_schema (TYPE ICEBERG, CATALOG_TYPE 'glue', ENDPOINT 'http://127.0.0.1:5055',
+	REGION 'glue-attach-test', SECRET 'glue_test_secret', DEFAULT_SCHEMA 'does_not_exist');
+----
+default_schema 'does_not_exist' does not exist
+
+# A catalog in another region (moto keeps regions apart) that outlives the attachment
+statement ok
+ATTACH ':' AS persisted (TYPE ICEBERG, CATALOG_TYPE 'glue', ENDPOINT 'http://127.0.0.1:5055',
+	REGION 'glue-attach-test', SECRET 'glue_test_secret', DEFAULT_LOCATION '{TEMP_DIR}/glue_attach_wh');
+
+statement ok
+DROP TABLE IF EXISTS persisted.attach_ns.t;
+
+statement ok
+DROP SCHEMA IF EXISTS persisted.attach_ns;
+
+statement ok
+CREATE SCHEMA persisted.attach_ns;
+
+statement ok
+CREATE TABLE persisted.attach_ns.t AS SELECT range AS i FROM range(3);
+
+# The table's location follows GlueCatalog of Iceberg Java: '<warehouse>/<database>.db/<table>'
+query I
+SELECT count(*) > 0 FROM glob('{TEMP_DIR}/glue_attach_wh/attach_ns.db/t/metadata/*.metadata.json');
+----
+true
+
+statement ok
+DETACH persisted;
+
+statement ok
+ATTACH ':' AS persisted (TYPE ICEBERG, CATALOG_TYPE 'glue', ENDPOINT 'http://127.0.0.1:5055',
+	REGION 'glue-attach-test', SECRET 'glue_test_secret', DEFAULT_SCHEMA 'attach_ns');
+
+query I
+SELECT sum(i) FROM persisted.t;
+----
+3
+
+# The catalog of the test config is in a region of its own
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'my_datalake' AND table_name = 't';
+----
+0
+
+statement ok
+DROP TABLE persisted.attach_ns.t;
+
+statement ok
+DROP SCHEMA persisted.attach_ns;

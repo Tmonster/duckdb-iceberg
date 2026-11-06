@@ -1,44 +1,49 @@
 #pragma once
 
-#include "duckdb/main/client_context.hpp"
+#include "catalog/metastore/iceberg_metastore_catalog.hpp"
 
 namespace duckdb {
 
 class IcebergFilesystemCatalog;
-class IcebergTransaction;
-struct IcebergTransactionAlterUpdate;
-struct IcebergTransactionDeleteUpdate;
-struct IcebergRetryConfig;
 
-//! Publishes a transaction's buffered changes to an Iceberg filesystem catalog. A table commit applies the
-//! transaction's updates client-side (see IcebergClientCommit) and creates the next version's metadata file
-//! exclusively, which is the commit point; the version hint is updated afterwards. Namespace changes are applied
-//! one after another, not atomically.
-class IcebergFilesystemTransactionCommit {
+//! A commit attempt on an Iceberg filesystem catalog. A table's pointer is its newest 'v<N>.metadata.json': the
+//! catalog creates the next version exclusively (see IcebergFilesystemCatalog::WriteTableMetadata), and the version
+//! hint written here only spares readers a search. Every operation is published as it is called.
+class IcebergFilesystemMetastoreCommit : public IcebergMetastoreCommit {
 public:
-	IcebergFilesystemTransactionCommit(IcebergFilesystemCatalog &catalog, IcebergTransaction &transaction);
+	IcebergFilesystemMetastoreCommit(IcebergFilesystemCatalog &catalog, ClientContext &context);
 
 public:
-	void Commit();
+	bool IsAtomic() const override {
+		return false;
+	}
+	bool NamespaceExists(const vector<string> &namespace_items) override;
+	void CreateNamespace(const vector<string> &namespace_items) override;
+	void UpdateNamespaceProperties(const vector<string> &namespace_items, const set<string> &removals,
+	                               const case_insensitive_map_t<string> &updates) override;
+	void DropNamespace(const vector<string> &namespace_items) override;
+	string LoadMetadataLocation(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type) override;
+	void CreateEntry(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type,
+	                 const string &metadata_location, optional_ptr<const IcebergTableMetadata> metadata) override;
+	void SwapMetadataLocation(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type,
+	                          const string &base_location, const string &new_location,
+	                          optional_ptr<const IcebergTableMetadata> metadata) override;
+	void DropEntry(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type,
+	               optional_ptr<const IcebergTableMetadata> metadata) override;
+	void RenameEntry(const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type,
+	                 const string &new_name) override;
+	void Finish() override {
+	}
+	void Abort() override {
+	}
 
 private:
-	void CommitWithRetries(ClientContext &context);
-	void CreateNamespaces(ClientContext &context);
-	void CommitTables(IcebergTransactionAlterUpdate &alter_update, ClientContext &context,
-	                  IcebergRetryConfig &retry_config, bool &retryable, unordered_set<string> &table_keys);
-	void DropTable(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context);
-	void DropNamespaces(ClientContext &context);
+	//! Point the version hint of a table at 'metadata_location'
+	void WriteVersionHint(const IcebergMetastoreIdentifier &identifier, const string &metadata_location);
 
 private:
 	IcebergFilesystemCatalog &catalog;
-	IcebergTransaction &transaction;
-	DatabaseInstance &db;
-	//! Files written by the current attempt of a table commit that did not succeed
-	vector<string> written_files;
-	//! Whether a change was published already, after which a failure must not remove the transaction's files
-	bool published = false;
-	//! Updates of the in-memory catalog state, applied once all changes are published
-	vector<std::function<void()>> on_commit;
+	ClientContext &context;
 };
 
 } // namespace duckdb

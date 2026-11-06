@@ -20,7 +20,7 @@ namespace duckdb {
 IcebergFilesystemCatalog::IcebergFilesystemCatalog(AttachedDatabase &db_p, AccessMode access_mode,
                                                    IcebergAttachOptions &attach_options_p,
                                                    const optional<Identifier> &default_schema)
-    : IcebergCatalog(IcebergCatalogType::FILESYSTEM, db_p, access_mode, attach_options_p, default_schema),
+    : IcebergMetastoreCatalog(IcebergCatalogType::FILESYSTEM, db_p, access_mode, attach_options_p, default_schema),
       warehouse_root(attach_options_p.warehouse) {
 	StringUtil::RTrim(warehouse_root, "/");
 	// Nested namespaces are joined with '.' in DuckDB schema names, and are nested directories here
@@ -47,11 +47,6 @@ string IcebergFilesystemCatalog::MetadataFile(FileSystem &fs, const string &tabl
 
 bool IcebergFilesystemCatalog::IsTableDirectory(FileSystem &fs, const string &directory) {
 	return fs.DirectoryExists(fs.JoinPath(directory, "metadata"));
-}
-
-bool IcebergFilesystemCatalog::InWarehouse(const string &location) const {
-	auto prefix = warehouse_root + "/";
-	return StringUtil::StartsWith(location, prefix) && location.size() > prefix.size();
 }
 
 vector<string> IcebergFilesystemCatalog::ListDirectories(FileSystem &fs, const string &directory) {
@@ -174,35 +169,6 @@ IcebergListTablesResult IcebergFilesystemCatalog::ListTables(ClientContext &cont
 	return result;
 }
 
-IcebergLoadTableResult IcebergFilesystemCatalog::LoadTable(ClientContext &context,
-                                                           const vector<string> &namespace_items,
-                                                           const string &table_name) {
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto table_directory = TableDirectory(namespace_items, table_name);
-	optional_idx version;
-	if (IsTableDirectory(fs, table_directory)) {
-		version = CurrentVersion(fs, table_directory);
-	}
-	IcebergLoadTableResult result;
-	if (!version.IsValid()) {
-		result.status_ = HTTPStatusCode::NotFound_404;
-		rest_api_objects::IcebergErrorResponse error;
-		error._error.type = "NoSuchTableException";
-		error._error.message =
-		    StringUtil::Format("Table does not exist: %s.%s", StringUtil::Join(namespace_items, "."), table_name);
-		error._error.code = 404;
-		result.error_ = std::move(error);
-		return result;
-	}
-	auto metadata_location = MetadataFile(fs, table_directory, version.GetIndex());
-	auto load_table_result = make_uniq<rest_api_objects::LoadTableResult>();
-	load_table_result->metadata = IcebergTableMetadata::Parse(metadata_location, fs, "none");
-	load_table_result->metadata_location = metadata_location;
-	result.status_ = HTTPStatusCode::OK_200;
-	result.result_ = std::move(load_table_result);
-	return result;
-}
-
 bool IcebergFilesystemCatalog::SupportsViews(IcebergViewOperation operation) const {
 	return false;
 }
@@ -210,11 +176,6 @@ bool IcebergFilesystemCatalog::SupportsViews(IcebergViewOperation operation) con
 IcebergListViewsResult IcebergFilesystemCatalog::ListViews(ClientContext &context,
                                                            const vector<string> &namespace_items) {
 	return vector<rest_api_objects::TableIdentifier>();
-}
-
-IcebergLoadViewResult IcebergFilesystemCatalog::LoadView(ClientContext &context, const vector<string> &namespace_items,
-                                                         const string &view_name) {
-	throw NotImplementedException("Views are not supported by Iceberg filesystem catalogs");
 }
 
 //===--------------------------------------------------------------------===//
@@ -232,29 +193,99 @@ IcebergTable &IcebergFilesystemCatalog::CreateTable(ClientContext &context, Iceb
 		                            "<table>' ('%s'), a different 'location' is not supported",
 		                            location);
 	}
-	auto metadata = request.CreateInitialMetadata(UUID::ToString(UUID::GenerateRandomUUID()), location);
-	auto &table_info = AddCreatedTable(context, IcebergTable(*this, schema, request.GetName(), std::move(metadata)));
-	// The table is created from empty metadata at commit
-	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
-	auto &transaction_data = table_info.GetOrCreateTransactionData(iceberg_transaction);
-	transaction_data.TableAddAssertCreate();
-	AddCreateTableUpdates(context, table_info);
-	return table_info;
+	return IcebergMetastoreCatalog::CreateTable(context, schema, request);
+}
+
+string IcebergFilesystemCatalog::DefaultTableLocation(ClientContext &context, const vector<string> &namespace_items,
+                                                      const string &table_name) {
+	return TableDirectory(namespace_items, table_name);
 }
 
 void IcebergFilesystemCatalog::VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const {
-	if (alter_update.updated_tables.size() > 1) {
-		throw TransactionException("Iceberg filesystem catalog cannot commit this transaction atomically because it "
-		                           "would change multiple tables, each table's commit is a separate file");
-	}
+	VerifySingleTableUpdate(alter_update);
 }
 
 //===--------------------------------------------------------------------===//
 // Commit
 //===--------------------------------------------------------------------===//
 
-void IcebergFilesystemCatalog::Commit(IcebergTransaction &transaction) {
-	IcebergFilesystemTransactionCommit(*this, transaction).Commit();
+string IcebergFilesystemCatalog::GetMetadataLocation(ClientContext &context,
+                                                     const IcebergMetastoreIdentifier &identifier,
+                                                     IcebergMetastoreEntryType type) {
+	if (type != IcebergMetastoreEntryType::TABLE) {
+		return string();
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto table_directory = TableDirectory(identifier.namespace_items, identifier.name);
+	if (!IsTableDirectory(fs, table_directory)) {
+		return string();
+	}
+	auto version = CurrentVersion(fs, table_directory);
+	if (!version.IsValid()) {
+		return string();
+	}
+	return MetadataFile(fs, table_directory, version.GetIndex());
+}
+
+unique_ptr<IcebergMetastoreCommit> IcebergFilesystemCatalog::BeginCommit(ClientContext &context) {
+	return make_uniq<IcebergFilesystemMetastoreCommit>(*this, context);
+}
+
+namespace {
+
+//! Create 'path' with 'content', returns false if it exists already
+bool WriteNewFile(FileSystem &fs, const string &path, const string &content) {
+	auto flags = FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE |
+	             FileFlags::FILE_FLAGS_EXCLUSIVE_CREATE | FileFlags::FILE_FLAGS_NULL_IF_EXISTS;
+	if (fs.FileExists(path)) {
+		return false;
+	}
+	unique_ptr<FileHandle> file;
+	try {
+		file = fs.OpenFile(path, flags);
+	} catch (std::exception &) {
+		// Not every file system returns NULL for an existing file
+		if (fs.FileExists(path)) {
+			return false;
+		}
+		throw;
+	}
+	if (!file) {
+		return false;
+	}
+	file->Write((void *)content.c_str(), content.size());
+	file->Close();
+	return true;
+}
+
+} // namespace
+
+string IcebergFilesystemCatalog::WriteTableMetadata(ClientContext &context, IcebergMetastoreCommit &commit,
+                                                    const IcebergMetastoreIdentifier &identifier,
+                                                    IcebergTableMetadata &metadata,
+                                                    optional_ptr<const IcebergTableMetadata> base,
+                                                    const string &base_location) {
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto table_directory = TableDirectory(identifier.namespace_items, identifier.name);
+	auto metadata_directory = fs.JoinPath(table_directory, "metadata");
+	if (!fs.IsRemoteFile(metadata_directory)) {
+		fs.CreateDirectoriesRecursive(metadata_directory);
+	}
+	idx_t next_version = 1;
+	if (base) {
+		next_version = IcebergClientCommit::ParseMetadataVersion(base_location) + 1;
+	} else if (CurrentVersion(fs, table_directory).IsValid()) {
+		throw CatalogException("Table with name \"%s\" already exists", identifier.name);
+	}
+	IcebergClientCommit::RecordPreviousMetadata(metadata, base, base_location);
+	auto metadata_location = MetadataFile(fs, table_directory, next_version);
+	if (!WriteNewFile(fs, metadata_location, metadata.ToJSON())) {
+		throw TransactionException("Table %s was changed by a concurrent commit (version %d exists already)",
+		                           identifier.name, next_version);
+	}
+	// The new version is committed: the version hint only spares readers a search for it
+	commit.MarkPublished();
+	return metadata_location;
 }
 
 } // namespace duckdb
