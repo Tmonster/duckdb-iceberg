@@ -130,7 +130,7 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
-	auto &schema_name = schema_lookup.GetEntryName();
+	auto schema_name = FoldIdentifier(schema_lookup.GetEntryName());
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
@@ -143,6 +143,24 @@ optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
 	return default_schema;
 }
 
+string IcebergCatalog::FoldIdentifier(const string &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::LOWERCASE) {
+		return StringUtil::Lower(name);
+	}
+	return name;
+}
+
+QualifiedName IcebergCatalog::FoldName(const QualifiedName &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::PRESERVE_CASE) {
+		return name;
+	}
+	auto path = name.Path();
+	for (idx_t i = name.Catalog().empty() ? 0 : 1; i < path.size(); i++) {
+		path[i] = Identifier(FoldIdentifier(path[i].GetIdentifierName()));
+	}
+	return QualifiedName::FromPath(std::move(path));
+}
+
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
 	optional_ptr<ClientContext> context = transaction.GetContext();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
@@ -151,6 +169,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	D_ASSERT(context);
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
 	auto &schema_name = info.GetQualifiedName().Schema().GetIdentifierName();
 	auto created_schema = iceberg_transaction.created_schemas.CheckPending(schema_name, info.on_conflict);
@@ -173,7 +192,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 			iceberg_transaction.schemas[schema_name] = new_schema;
 			return new_schema.get();
 		}
-		throw CatalogException("Schema with name \"%s\" already exists", info.GetQualifiedName().Schema());
+		throw CatalogException("Schema with name %s already exists", info.GetQualifiedName().Schema());
 	}
 
 	// Schema does not exist - stage it locally and defer the server creation and catalog publication to commit
@@ -183,11 +202,16 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	return result;
 }
 
-void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
+void IcebergCatalog::VerifyDropSchema(const DropInfo &info) const {
 	if (info.cascade) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
 	}
+}
+
+void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
+	VerifyDropSchema(info);
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
 	// Verify schema existence in the catalog first
 	bool schema_exists = SchemaExists(context, info.GetQualifiedName().Name().GetIdentifierName());
@@ -199,7 +223,7 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 			GetSchemas().RemoveEntry(info.GetQualifiedName().Name().GetIdentifierName());
 			return;
 		}
-		throw CatalogException("Schema with name \"%s\" does not exist", info.GetQualifiedName().Name());
+		throw CatalogException("Schema with name %s does not exist", info.GetQualifiedName().Name());
 	}
 
 	// Schema exists - defer the server deletion to commit
@@ -245,7 +269,7 @@ unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context,
 			}
 			throw InvalidConfigurationException(
 			    "Found a secret by the name of '%s', but it is not of an accepted type for a 'secret', "
-			    "accepted types are: 's3' or 'aws', found '%s'",
+			    "accepted types are: 's3' or 'aws', found %s",
 			    secret_name, secret_type);
 		}
 		throw InvalidConfigurationException(
