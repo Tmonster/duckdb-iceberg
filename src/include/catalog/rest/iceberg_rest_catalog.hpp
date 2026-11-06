@@ -45,6 +45,7 @@ public:
 	                               const string &view_name) override;
 	IcebergTable &CreateTable(ClientContext &context, IcebergSchemaEntry &schema,
 	                          const IcebergCreateTableRequest &request) override;
+	void VerifyDropSchema(const DropInfo &info) const override;
 	void VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const override;
 	void Commit(IcebergTransaction &transaction) override;
 
@@ -63,6 +64,8 @@ public:
 	//! optional prefix path components
 	vector<string> prefix;
 	unordered_set<string> supported_urls;
+	//! The well-known catalog the REST catalog was attached as, if any
+	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
 };
 
 } // namespace duckdb

@@ -1,6 +1,7 @@
 #include "catalog/rest/iceberg_rest_catalog.hpp"
 
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
 
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/catalog_entry/table/iceberg_table.hpp"
@@ -122,6 +123,18 @@ void IcebergRestCatalog::VerifyTableUpdates(const IcebergTransactionAlterUpdate 
 	}
 	throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it would "
 	                           "require multiple table commit requests without atomic multi-table commit support");
+}
+
+void IcebergRestCatalog::VerifyDropSchema(const DropInfo &info) const {
+	if (endpoint_type == IcebergEndpointType::AWS_GLUE) {
+		// Glue deletes a namespace's tables together with it, so DROP SCHEMA has to say so
+		if (!info.cascade) {
+			throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for AWS Glue: deleting a "
+			                              "namespace also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE");
+		}
+		return;
+	}
+	IcebergCatalog::VerifyDropSchema(info);
 }
 
 bool IcebergRestCatalog::MultiTableCommitAvailable() const {
@@ -246,6 +259,7 @@ void IcebergRestCatalog::ParsePrefix() {
 
 void IcebergRestCatalog::Configure(ClientContext &context, const rest_api_objects::CatalogConfig &catalog_config,
                                IcebergEndpointType endpoint_type) {
+	this->endpoint_type = endpoint_type;
 	base_uri = attach_options.catalog_uri;
 	StringUtil::RTrim(base_uri, "/");
 	if (base_uri.empty()) {
