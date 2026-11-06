@@ -35,18 +35,22 @@ static string OperationTypeToString(IcebergSnapshotOperationType type) {
 	}
 }
 
-rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetadata &table_metadata) const {
+rest_api_objects::Snapshot IcebergSnapshot::ToMetadataObject() const {
 	rest_api_objects::Snapshot res;
 
 	res.snapshot_id = snapshot_id;
 	res.timestamp_ms = timestamp_ms.value;
-	if (manifest_list.empty()) {
-		throw InvalidConfigurationException("Writing snapshots without a manifest list is not supported");
+	if (!manifest_list.empty()) {
+		res.manifest_list = manifest_list;
+	} else if (!manifests.empty()) {
+		res.manifests = manifests;
+	} else {
+		throw InvalidConfigurationException("Snapshot %d has neither a manifest list nor manifests", snapshot_id);
 	}
-	res.manifest_list = manifest_list;
 
 	res.summary.operation = OperationTypeToString(operation);
-	res.summary.additional_properties = metrics.ToString();
+	// Keep the summary as committed (it may hold properties of other engines), unless there is none yet
+	res.summary.additional_properties = summary.empty() ? metrics.ToString() : summary;
 
 	if (parent_snapshot_id) {
 		res.parent_snapshot_id = *parent_snapshot_id;
@@ -60,12 +64,23 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 
 	res.schema_id = schema_id;
 
+	// Snapshots committed before a table was upgraded to v3 have no first-row-id
 	if (first_row_id) {
 		res.first_row_id = *first_row_id;
-	} else if (table_metadata.iceberg_version >= 3) {
-		throw InvalidConfigurationException("first-row-id required for V3 tables!");
 	}
 
+	return res;
+}
+
+rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetadata &table_metadata) const {
+	if (manifest_list.empty()) {
+		throw InvalidConfigurationException("Writing snapshots without a manifest list is not supported");
+	}
+	auto res = ToMetadataObject();
+	res.summary.additional_properties = metrics.ToString();
+	if (!first_row_id && table_metadata.iceberg_version >= 3) {
+		throw InvalidConfigurationException("first-row-id required for V3 tables!");
+	}
 	return res;
 }
 

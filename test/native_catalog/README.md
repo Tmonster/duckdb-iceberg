@@ -50,6 +50,15 @@ Unlike the Python config, it does not skip unexpected unsupported errors.
 Filters use repository-relative paths so each test runs once and the config's
 relative skip paths also apply on Windows.
 
+To also check the client-side commit used by catalogs without a REST server,
+run the suite with `iceberg_verify_client_commit` enabled. Every commit is then
+applied client-side, written to a metadata file, read back, and compared to the
+native catalog's result:
+
+```sh
+make test_mock_native_verify_commit_reldebug
+```
+
 The standalone API tests exercise independent database lifetimes and publication
 failure after completing the first file of a multi-table commit:
 

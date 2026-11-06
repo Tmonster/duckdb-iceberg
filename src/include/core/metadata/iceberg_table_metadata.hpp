@@ -143,6 +143,7 @@ private:
 	JSONMutableValue TablePropertiesToJSON(JSONWriter &writer) const;
 	JSONMutableValue SnapshotsToJSON(JSONWriter &writer) const;
 	JSONMutableValue SnapshotLogToJSON(JSONWriter &writer) const;
+	JSONMutableValue MetadataLogToJSON(JSONWriter &writer) const;
 	JSONMutableValue SortOrdersToJSON(JSONWriter &writer) const;
 
 public:

@@ -682,7 +682,7 @@ JSONMutableValue IcebergTableMetadata::SnapshotsToJSON(JSONWriter &writer) const
 	auto snapshots_array = writer.CreateArray();
 	for (auto &it : snapshots) {
 		auto &snapshot = it.second;
-		auto snapshot_rest_object = snapshot.ToRESTObject(*this);
+		auto snapshot_rest_object = snapshot.ToMetadataObject();
 		snapshots_array.Append(snapshot_rest_object.ToJSON(writer));
 	}
 	return snapshots_array;
@@ -690,11 +690,21 @@ JSONMutableValue IcebergTableMetadata::SnapshotsToJSON(JSONWriter &writer) const
 
 JSONMutableValue IcebergTableMetadata::SnapshotLogToJSON(JSONWriter &writer) const {
 	auto log_array = writer.CreateArray();
-	for (auto &it : snapshots) {
-		auto &snapshot = it.second;
+	for (auto &entry : snapshot_log) {
 		auto log_item = writer.CreateObject();
-		log_item.Add("snapshot-id", writer.CreateSignedInteger(snapshot.snapshot_id));
-		log_item.Add("timestamp-ms", writer.CreateSignedInteger(snapshot.timestamp_ms.value));
+		log_item.Add("snapshot-id", writer.CreateSignedInteger(entry.first));
+		log_item.Add("timestamp-ms", writer.CreateSignedInteger(entry.second.value));
+		log_array.Append(log_item);
+	}
+	return log_array;
+}
+
+JSONMutableValue IcebergTableMetadata::MetadataLogToJSON(JSONWriter &writer) const {
+	auto log_array = writer.CreateArray();
+	for (auto &entry : metadata_log) {
+		auto log_item = writer.CreateObject();
+		log_item.AddString("metadata-file", entry.metadata_file);
+		log_item.Add("timestamp-ms", writer.CreateSignedInteger(entry.timestamp_ms.value));
 		log_array.Append(log_item);
 	}
 	return log_array;
@@ -737,6 +747,9 @@ string IcebergTableMetadata::ToJSON() const {
 		root_obj.Add("refs", refs->ToJSON(writer));
 	}
 	root_obj.Add("snapshot-log", SnapshotLogToJSON(writer));
+	if (!metadata_log.empty()) {
+		root_obj.Add("metadata-log", MetadataLogToJSON(writer));
+	}
 	root_obj.Add("sort-orders", SortOrdersToJSON(writer));
 	root_obj.Add("default-sort-order-id", writer.CreateSignedInteger(default_sort_order_id.GetIndex()));
 	if (iceberg_version >= 3) {
