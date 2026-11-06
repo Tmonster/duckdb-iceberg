@@ -222,6 +222,7 @@ InsertionOrderPreservingMap<string> IcebergUpdate::ParamsToString() const {
 
 PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                              PhysicalOperator &child_plan) {
+	VerifyIcebergTable(op.table, "UPDATE");
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for updates of a Iceberg table");
 	}

@@ -103,6 +103,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	auto &config = DBConfig::GetConfig(instance);
 
+	config.AddExtensionOption("iceberg_glue_hive_partition_listing_threshold",
+	                          "When a scan of a Hive table in a Glue catalog reads at least this many partitions below "
+	                          "the table location, the location is listed once (recursively) instead of one listing per "
+	                          "partition",
+	                          LogicalType::UBIGINT, Value::UBIGINT(10));
 	config.AddExtensionOption(VERSION_GUESSING_CONFIG_VARIABLE,
 	                          "Enable globbing the filesystem (if possible) to find the latest version metadata. This "
 	                          "could result in reading an uncommitted version.",

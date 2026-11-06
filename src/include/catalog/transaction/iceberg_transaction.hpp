@@ -146,6 +146,9 @@ public:
 	unordered_map<string, unique_ptr<CreateViewInfo>> created_views;
 	//! Resolved views belong to this transaction, never to the shared schema cache.
 	unordered_map<string, unique_ptr<ViewCatalogEntry>> views;
+	//! Tables of other formats (see IcebergCatalog::LookupOtherFormatTable) resolved by this transaction, keyed by
+	//! '<schema>.<table>'
+	unordered_map<string, unique_ptr<TableCatalogEntry>> other_format_tables;
 	//! Keep replaced entries alive for statements already bound in this transaction.
 	vector<unique_ptr<ViewCatalogEntry>> retired_views;
 	//! Catalog view listings, keyed by schema name, with transaction-local lifetime.
