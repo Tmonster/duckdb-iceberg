@@ -1,0 +1,6 @@
+{
+	"extends": ["sql.json"],
+	"description": "Iceberg SQL catalog (CATALOG_TYPE 'sql') stored in PostgreSQL, attached through the postgres_scanner extension. Start the database with 'make sql-postgres' and build with ICEBERG_SQL_CATALOG_POSTGRES=1. Each test file uses its own catalog_name, so tests don't see each other's tables.",
+	"on_init": "ATTACH '{TEMP_DIR}/iceberg_sql_warehouse' AS my_datalake (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'postgresql://postgres@127.0.0.1:55432/iceberg_catalog', CATALOG_NAME '{TEMP_DIR}'); CREATE SCHEMA IF NOT EXISTS my_datalake.default;",
+	"statically_loaded_extensions": ["core_functions", "parquet", "avro", "iceberg", "httpfs", "icu", "postgres_scanner"]
+}

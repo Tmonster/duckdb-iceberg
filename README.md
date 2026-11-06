@@ -37,7 +37,7 @@ ATTACH 's3://bucket/warehouse' AS lake (
   namespace's `location` property.
 - `URI` is the database holding the catalog. `duckdb:<path>` is a DuckDB database file. SQLAlchemy and JDBC
   URIs (`sqlite:///<path>`, `postgresql://...`, `jdbc:sqlite:<path>`, ...) use the DuckDB `sqlite` and
-  `postgres` extensions.
+  `postgres` extensions. SQLite databases are switched to WAL mode, so that readers don't block commits.
 - `CATALOG_NAME` is the value of the `catalog_name` column, which lets several catalogs share a database. It
   defaults to the ATTACH alias, so attach the same catalog under another alias with `CATALOG_NAME`.
 - `INIT_CATALOG_TABLES` (default `true`) creates the catalog tables if they don't exist.
@@ -125,12 +125,22 @@ make reldebug
 make test_reldebug
 ```
 
-The SQL catalog suite runs the catalog-agnostic tests against a SQL catalog stored in a DuckDB file. It needs
-no service:
+The SQL catalog suites run the catalog-agnostic tests against a SQL catalog stored in a DuckDB file or a SQLite
+database, which need no service, or in PostgreSQL. The PostgreSQL suite needs a build that includes the
+`postgres_scanner` extension, whose client library is built with `bison` and `flex`:
 
 ```shell
 make test_sql_catalog_release
+make test_sql_catalog_sqlite_release
+
+ICEBERG_SQL_CATALOG_POSTGRES=1 make release
+make sql-postgres
+make test_sql_catalog_postgres_release
+make sql-postgres-stop
 ```
+
+`make test_sql_catalog_python_release` checks that DuckDB and PyIceberg can share a SQL catalog; it needs
+`pyiceberg[sql-sqlite,pyarrow]`.
 
 Use `T` to narrow a Make-based run, or invoke the sqllogictest runner directly:
 
