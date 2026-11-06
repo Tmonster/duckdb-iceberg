@@ -250,7 +250,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	// The view is only sent at commit, so reject catalogs without a create view endpoint here.
 	const auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	if (!ic_catalog.SupportsViews(IcebergViewOperation::CREATE)) {
-		throw NotImplementedException("This Iceberg REST catalog server does not support creating views");
+		throw NotImplementedException("This Iceberg catalog does not support creating views");
 	}
 
 	// IF NOT EXISTS also skips binding when the view exists, so handle conflicts first.
@@ -1247,6 +1247,11 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 		auto view_entry = GetCatalogSet(type).GetViewEntry(context, lookup_info.GetEntryName());
 		if (view_entry) {
 			return view_entry;
+		}
+		// A schema created by this transaction is not in the catalog until the transaction commits
+		auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+		if (iceberg_transaction.created_schemas.GetEntry(name.GetIdentifierName()).get() == this) {
+			return nullptr;
 		}
 		// verify the schema exists
 		if (!ic_catalog.SchemaExists(context, name.GetIdentifierName())) {

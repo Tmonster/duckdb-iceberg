@@ -13,6 +13,8 @@
 #include "catalog/transaction/iceberg_transaction.hpp"
 #include "catalog/transaction/iceberg_transaction_update.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "common/iceberg_utils.hpp"
+#include "duckdb/common/json_document.hpp"
 
 namespace duckdb {
 
@@ -77,6 +79,36 @@ IcebergLoadTableResult IcebergMetastoreCatalog::LoadTable(ClientContext &context
 	load_table_result->metadata_location = metadata_location;
 	result.status_ = HTTPStatusCode::OK_200;
 	result.result_ = std::move(load_table_result);
+	return result;
+}
+
+IcebergLoadViewResult IcebergMetastoreCatalog::LoadView(ClientContext &context, const vector<string> &namespace_items,
+                                                        const string &view_name) {
+	IcebergMetastoreIdentifier identifier;
+	identifier.namespace_items = namespace_items;
+	identifier.name = view_name;
+	IcebergLoadViewResult result;
+	string metadata_location;
+	if (SupportsViews(IcebergViewOperation::LOAD)) {
+		metadata_location = GetMetadataLocation(context, identifier, IcebergMetastoreEntryType::VIEW);
+	}
+	if (metadata_location.empty()) {
+		result.status_ = HTTPStatusCode::NotFound_404;
+		rest_api_objects::IcebergErrorResponse error;
+		error._error.type = "NoSuchViewException";
+		error._error.message = StringUtil::Format("View does not exist: %s", identifier.ToString());
+		error._error.code = 404;
+		result.error_ = std::move(error);
+		return result;
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto json = IcebergUtils::FileToString(metadata_location, fs);
+	auto doc = JSONDocument::Parse(json.c_str(), json.size());
+	auto load_view_result = make_uniq<rest_api_objects::LoadViewResult>();
+	load_view_result->metadata = rest_api_objects::ViewMetadata::FromJSON(doc->GetRoot());
+	load_view_result->metadata_location = metadata_location;
+	result.status_ = HTTPStatusCode::OK_200;
+	result.result_ = std::move(load_view_result);
 	return result;
 }
 

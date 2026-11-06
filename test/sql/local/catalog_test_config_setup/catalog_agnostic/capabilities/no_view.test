@@ -31,12 +31,12 @@ SELECT id FROM my_datalake.default.cap_view;
 statement error
 CREATE VIEW my_datalake.default.cap_view_unsupported AS SELECT id FROM my_datalake.default.cap_view;
 ----
-This Iceberg REST catalog server does not support creating views
+This Iceberg catalog does not support creating views
 
 statement error
 CREATE VIEW IF NOT EXISTS my_datalake.default.cap_view_unsupported AS SELECT 42 AS answer;
 ----
-This Iceberg REST catalog server does not support creating views
+This Iceberg catalog does not support creating views
 
 # Inside a transaction the view is rejected at CREATE VIEW, not at COMMIT.
 statement ok
@@ -45,7 +45,7 @@ BEGIN;
 statement error
 CREATE VIEW my_datalake.default.cap_view_unsupported AS SELECT 42 AS answer;
 ----
-This Iceberg REST catalog server does not support creating views
+This Iceberg catalog does not support creating views
 
 statement ok
 ROLLBACK;

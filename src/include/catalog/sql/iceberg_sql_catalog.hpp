@@ -45,8 +45,6 @@ public:
 	                                   bool allow_forbidden) override;
 	bool SupportsViews(IcebergViewOperation operation) const override;
 	IcebergListViewsResult ListViews(ClientContext &context, const vector<string> &namespace_items) override;
-	IcebergLoadViewResult LoadView(ClientContext &context, const vector<string> &namespace_items,
-	                               const string &view_name) override;
 
 	string MetastoreName() const override {
 		return "SQL catalog";

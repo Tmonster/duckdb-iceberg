@@ -10,6 +10,11 @@
 
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/iceberg_view_entry.hpp"
+#include "duckdb/common/json_document.hpp"
+#include "duckdb/common/types/uuid.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "rest_catalog/objects/list.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/transaction/iceberg_client_commit.hpp"
 #include "catalog/transaction/iceberg_commit_staging.hpp"
@@ -39,9 +44,10 @@ bool CreatesTable(const rest_api_objects::CommitTableRequest &request) {
 } // namespace
 
 void IcebergMetastoreTransactionCommit::Commit() {
-	if (!transaction.created_views.empty() || !transaction.deleted_views.empty()) {
+	if ((!transaction.created_views.empty() && !catalog.SupportsViews(IcebergViewOperation::CREATE)) ||
+	    (!transaction.deleted_views.empty() && !catalog.SupportsViews(IcebergViewOperation::LOAD))) {
 		transaction.CleanupFiles();
-		throw NotImplementedException("Views are not supported by Iceberg %ss yet", catalog.MetastoreName());
+		throw NotImplementedException("Views are not supported by Iceberg %ss", catalog.MetastoreName());
 	}
 
 	Connection temp_con(db);
@@ -99,6 +105,8 @@ void IcebergMetastoreTransactionCommit::CommitWithRetries(ClientContext &context
 				    }
 			    },
 			    transaction.transaction_update);
+			DropViews(*commit);
+			CreateViews(*commit, context);
 			DropNamespaces(*commit);
 			commit->Finish();
 		} catch (TransactionException &ex) {
@@ -272,6 +280,78 @@ void IcebergMetastoreTransactionCommit::RenameTable(IcebergMetastoreCommit &comm
 		auto &schema = original_table.schema;
 		schema.tables.RenameEntry(original_table.name, new_name, std::move(new_table));
 	});
+}
+
+void IcebergMetastoreTransactionCommit::DropViews(IcebergMetastoreCommit &commit) {
+	for (auto &deleted_view : transaction.deleted_views) {
+		auto &info = deleted_view.second;
+		IcebergMetastoreIdentifier identifier;
+		identifier.namespace_items = info.namespace_items;
+		identifier.name = info.view_name;
+		commit.DropEntry(identifier, IcebergMetastoreEntryType::VIEW, nullptr);
+		OnEntryChanged(commit);
+	}
+	on_commit.push_back([this]() { transaction.deleted_views.clear(); });
+}
+
+void IcebergMetastoreTransactionCommit::CreateViews(IcebergMetastoreCommit &commit, ClientContext &context) {
+	auto &fs = FileSystem::GetFileSystem(context);
+	for (auto &created_view : transaction.created_views) {
+		auto &view_info = *created_view.second;
+		auto &view_name = view_info.GetViewName().GetIdentifierName();
+		// A schema created by this transaction is only published once the commit succeeds
+		auto &schema_name = view_info.GetQualifiedName().Schema().GetIdentifierName();
+		auto pending_schema = transaction.created_schemas.GetEntry(schema_name);
+		auto &schema_entry = pending_schema ? *pending_schema
+		                                    : catalog.GetSchemas()
+		                                          .GetEntry(context, schema_name, OnEntryNotFound::THROW_EXCEPTION)
+		                                          ->Cast<IcebergSchemaEntry>();
+
+		// The view's first metadata file, as a catalog server creates it from the CreateViewRequest
+		auto request_json = CreateIcebergViewRequestJSON(schema_entry, view_info);
+		auto request_doc = JSONDocument::Parse(request_json.c_str(), request_json.size());
+		auto request = rest_api_objects::CreateViewRequest::FromJSON(request_doc->GetRoot());
+		rest_api_objects::ViewMetadata metadata;
+		metadata.view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+		metadata.format_version = 1;
+		if (request.location) {
+			metadata.location = *request.location;
+		} else {
+			metadata.location = catalog.DefaultTableLocation(context, schema_entry.namespace_items, view_name);
+		}
+		StringUtil::RTrim(metadata.location, "/");
+		metadata.current_version_id = request.view_version.version_id;
+		rest_api_objects::ViewHistoryEntry history;
+		history.version_id = request.view_version.version_id;
+		history.timestamp_ms = request.view_version.timestamp_ms;
+		metadata.version_log.push_back(std::move(history));
+		metadata.versions.push_back(request.view_version.Copy());
+		metadata.schemas.push_back(request.schema.Copy());
+		metadata.properties = request.properties;
+
+		auto metadata_directory = fs.JoinPath(metadata.location, "metadata");
+		if (!fs.IsRemoteFile(metadata_directory)) {
+			fs.CreateDirectoriesRecursive(metadata_directory);
+		}
+		auto metadata_location = fs.JoinPath(
+		    metadata_directory, StringUtil::Format("00000-%s.metadata.json", UUID::ToString(UUID::GenerateRandomUUID())));
+		JSONWriter writer;
+		writer.SetRoot(metadata.ToJSON(writer));
+		auto content = writer.ToString();
+		{
+			auto file = fs.OpenFile(metadata_location, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE);
+			file->Write((void *)content.c_str(), content.size());
+			file->Close();
+		}
+		written_files.push_back(metadata_location);
+
+		IcebergMetastoreIdentifier identifier;
+		identifier.namespace_items = schema_entry.namespace_items;
+		identifier.name = view_name;
+		commit.CreateEntry(identifier, IcebergMetastoreEntryType::VIEW, metadata_location, nullptr);
+		OnEntryChanged(commit);
+	}
+	on_commit.push_back([this]() { transaction.created_views.clear(); });
 }
 
 void IcebergMetastoreTransactionCommit::DropNamespaces(IcebergMetastoreCommit &commit) {

@@ -46,7 +46,27 @@ ATTACH 's3://bucket/warehouse' AS lake (
   `commit.retry.*` properties.
 - Dropping a table only unregisters it, unless the catalog is attached with `PURGE_REQUESTED true`, which
   removes the table's files if they are inside the warehouse.
-- Views are not supported yet.
+- Views are stored as `VIEW` rows of `iceberg_tables`, pointing to Iceberg view metadata files, as in the JDBC
+  catalog. Catalogs that still have the JDBC catalog's original schema, without the `iceberg_type` column,
+  don't support views. PyIceberg versions without apache/iceberg-python#3709 list these views as tables.
+
+## Filesystem catalogs
+
+A catalog can also be just a directory tree, in the layout of the Hadoop catalog of Iceberg Java. There is no
+catalog service and no catalog database: DuckDB writes the table metadata files and version hints itself.
+
+```sql
+ATTACH '/path/to/warehouse' AS lake (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+```
+
+- Namespaces are directories, and tables are directories with a `metadata` directory:
+  `<warehouse>/<namespace>/<table>/metadata/v<N>.metadata.json` and `version-hint.text`, which holds the current
+  version `N`. Other Iceberg readers can read the tables, e.g. `iceberg_scan('<warehouse>/<namespace>/<table>')`.
+- A filesystem catalog is meant for a **single writer**. A table commit creates the next version's metadata file
+  exclusively, so concurrent commits to a table conflict (and are retried) on local file systems. A transaction
+  can only change one table, and namespace changes are applied one after another, not atomically.
+- Dropping a table removes its directory. Tables can't be renamed or have another location, namespaces have no
+  properties besides their location, and views are not supported.
 
 ## AWS Glue catalogs
 
@@ -166,6 +186,8 @@ make sql-postgres
 make test_sql_catalog_postgres_release
 make sql-postgres-stop
 ```
+
+`make test_filesystem_catalog_release` runs them against a filesystem catalog.
 
 `make test_sql_catalog_python_release` checks that DuckDB and PyIceberg can share a SQL catalog; it needs
 `pyiceberg[sql-sqlite,pyarrow]`.

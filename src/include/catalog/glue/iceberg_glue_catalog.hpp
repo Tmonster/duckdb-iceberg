@@ -34,8 +34,6 @@ public:
 	                                   bool allow_forbidden) override;
 	bool SupportsViews(IcebergViewOperation operation) const override;
 	IcebergListViewsResult ListViews(ClientContext &context, const vector<string> &namespace_items) override;
-	IcebergLoadViewResult LoadView(ClientContext &context, const vector<string> &namespace_items,
-	                               const string &view_name) override;
 	void VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const override;
 
 	string MetastoreName() const override {

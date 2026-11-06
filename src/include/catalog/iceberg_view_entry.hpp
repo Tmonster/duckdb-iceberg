@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
 
 namespace duckdb {
 
@@ -17,5 +18,11 @@ public:
 private:
 	string reason;
 };
+
+class IcebergSchemaEntry;
+
+//! The CreateViewRequest (see the REST catalog spec) of a view created in 'schema_entry', as JSON. Catalogs without
+//! a catalog server build the view's metadata from it.
+string CreateIcebergViewRequestJSON(const IcebergSchemaEntry &schema_entry, const CreateViewInfo &view_info);
 
 } // namespace duckdb
