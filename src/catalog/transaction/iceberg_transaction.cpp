@@ -18,6 +18,7 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
 #include "catalog/iceberg_catalog.hpp"
+#include "catalog/iceberg_table_prefetch.hpp"
 #include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
@@ -73,6 +74,17 @@ void IcebergTransaction::Start() {
 
 IcebergCatalog &IcebergTransaction::GetCatalog() {
 	return catalog;
+}
+
+IcebergTablePrefetch &IcebergTransaction::GetTablePrefetch(ClientContext &context) {
+	if (!table_prefetch) {
+		table_prefetch = make_uniq<IcebergTablePrefetch>(context, catalog);
+	}
+	return *table_prefetch;
+}
+
+optional_ptr<IcebergTablePrefetch> IcebergTransaction::TryGetTablePrefetch() {
+	return table_prefetch.get();
 }
 
 bool IcebergTransaction::HasTableUpdate() const {
