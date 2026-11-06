@@ -139,6 +139,12 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
 }
 
+void IcebergCatalog::VerifyIcebergTable(TableCatalogEntry &table, const string &statement) const {
+	if (!dynamic_cast<IcebergTableSchemaVersion *>(&table)) {
+		throw NotImplementedException("Cannot %s %s", statement, DescribeOtherFormatTable(table));
+	}
+}
+
 optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
 	return default_schema;
 }

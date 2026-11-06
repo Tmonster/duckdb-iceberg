@@ -245,6 +245,23 @@ public:
 	virtual IcebergLoadViewResult LoadView(ClientContext &context, const vector<string> &namespace_items,
 	                                       const string &view_name) = 0;
 
+	//! A table of another format with this name (e.g. a Hive table in Glue), looked up when no Iceberg table or view
+	//! has it. The entry lives as long as the transaction.
+	virtual optional_ptr<CatalogEntry> LookupOtherFormatTable(ClientContext &context, IcebergSchemaEntry &schema,
+	                                                          const string &table_name) {
+		return nullptr;
+	}
+	//! 'a Hive table ("t" in Glue database "db")', for errors about a table of another format
+	virtual string DescribeOtherFormatTable(const TableCatalogEntry &table) const {
+		return StringUtil::Format("\"%s\", which is not an Iceberg table", table.name.GetIdentifierName());
+	}
+	//! Throws if 'table' is not an Iceberg table, for the statements only Iceberg tables support
+	void VerifyIcebergTable(TableCatalogEntry &table, const string &statement) const;
+	//! The tables of other formats in a schema, listed after its Iceberg tables
+	virtual void ScanOtherFormatTables(ClientContext &context, IcebergSchemaEntry &schema,
+	                                   const std::function<void(CatalogEntry &)> &callback) {
+	}
+
 	//===--------------------------------------------------------------------===//
 	// Catalog type hooks: statement time
 	//===--------------------------------------------------------------------===//

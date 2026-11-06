@@ -190,8 +190,16 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 	}
 	case CatalogType::TABLE_ENTRY: {
 		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(entry_name)));
-		if (!tables.GetEntry(context, lookup) && tables.GetViewEntry(context, entry_name)) {
-			throw CatalogException("Existing object \"%s\" is of type View, trying to drop type Table", entry_name);
+		if (!tables.GetEntry(context, lookup)) {
+			if (tables.GetViewEntry(context, entry_name)) {
+				throw CatalogException("Existing object \"%s\" is of type View, trying to drop type Table", entry_name);
+			}
+			auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+			auto other_format_table = ic_catalog.LookupOtherFormatTable(context, *this, entry_name);
+			if (other_format_table) {
+				throw NotImplementedException("Cannot DROP %s: only Iceberg tables can be dropped",
+				                              ic_catalog.DescribeOtherFormatTable(other_format_table->Cast<TableCatalogEntry>()));
+			}
 		}
 		tables.DropEntry(context, info, delete_entry);
 		return;
@@ -659,6 +667,12 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	if (!catalog_entry) {
 		if (tables.GetViewEntry(context, info.GetQualifiedName().Name().GetIdentifierName())) {
 			throw NotImplementedException("ALTER VIEW is not supported in Iceberg catalogs");
+		}
+		auto other_format_table =
+		    ic_catalog.LookupOtherFormatTable(context, *this, info.GetQualifiedName().Name().GetIdentifierName());
+		if (other_format_table) {
+			throw NotImplementedException("Cannot ALTER %s: only Iceberg tables can be altered",
+			                              ic_catalog.DescribeOtherFormatTable(other_format_table->Cast<TableCatalogEntry>()));
 		}
 		throw CatalogException("Table with name %s does not exist!", info.GetQualifiedName().Name());
 	}
@@ -1214,6 +1228,7 @@ void IcebergSchemaEntry::Scan(ClientContext &context, CatalogType type,
 		return;
 	}
 	GetCatalogSet(type).Scan(context, callback);
+	catalog.Cast<IcebergCatalog>().ScanOtherFormatTables(context, *this, callback);
 }
 void IcebergSchemaEntry::Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) {
 	throw NotImplementedException("Scan without context not supported");
@@ -1247,6 +1262,10 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 		auto view_entry = GetCatalogSet(type).GetViewEntry(context, lookup_info.GetEntryName());
 		if (view_entry) {
 			return view_entry;
+		}
+		auto other_format_table = ic_catalog.LookupOtherFormatTable(context, *this, lookup_info.GetEntryName());
+		if (other_format_table) {
+			return other_format_table;
 		}
 		// A schema created by this transaction is not in the catalog until the transaction commits
 		auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);

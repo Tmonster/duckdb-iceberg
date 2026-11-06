@@ -87,8 +87,11 @@ ATTACH ':' AS glue (
 - The ATTACH path is the Glue catalog id: `:` for the default catalog of the account, or e.g. `123456789012`.
 - `REGION` defaults to the secret's region, `SECRET` names the S3/AWS secret to sign requests with, and
   `ENDPOINT` overrides the Glue endpoint (e.g. for moto).
-- A Glue database is a schema; Glue has no nested namespaces. Only tables with the parameter
-  `table_type = ICEBERG` are listed.
+- A Glue database is a schema; Glue has no nested namespaces. Tables with the parameter `table_type = ICEBERG` are
+  Iceberg tables. Glue's Hive tables are listed and can be read too (`duckdb_tables().tags['table_type']` is
+  `HIVE`): the reader follows the table's SerDe (parquet, csv, json, avro), Glue's schema and partitions, and
+  filters on partition columns prune partitions before any file is listed. Hive tables can't be changed with
+  DELETE, UPDATE, MERGE, ALTER or DROP. Delta and Hudi tables are not listed.
 - New tables are created at `<database LocationUri>/<table>`, else at `<DEFAULT_LOCATION>/<database>.db/<table>`.
   The `location` and `comment` schema properties are the database's `LocationUri` and `Description`.
 - Commits swap the table's `metadata_location` parameter with `UpdateTable`, passing the table's `VersionId` so
@@ -194,10 +197,12 @@ make sql-postgres-stop
 
 The Glue suite runs the catalog-agnostic tests against [moto](https://github.com/getmoto/moto), a local
 implementation of the Glue API, installed into `.venv-glue-moto` (no Docker). Each test attaches with its own
-region, which moto keeps apart, so every test starts with an empty catalog:
+region, which moto keeps apart, so every test starts with an empty catalog. The Python tests register Hive tables
+in moto with boto3:
 
 ```shell
 make test_glue_catalog_release
+make test_glue_catalog_python_release
 ```
 
 Use `T` to narrow a Make-based run, or invoke the sqllogictest runner directly:
