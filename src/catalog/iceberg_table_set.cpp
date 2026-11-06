@@ -20,6 +20,7 @@
 #include "common/iceberg_constants.hpp"
 #include "catalog/iceberg_catalog.hpp"
 #include "catalog/iceberg_request_executor.hpp"
+#include "catalog/iceberg_table_prefetch.hpp"
 #include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
 #include "catalog/catalog_entry/table/iceberg_table.hpp"
@@ -38,6 +39,15 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 		return true;
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto &transaction = IcebergTransaction::Get(context, catalog);
+	auto prefetch = transaction.TryGetTablePrefetch();
+	if (prefetch) {
+		IcebergLoadTableResult prefetched;
+		unique_ptr<LoadTableCachePublication> prefetched_publication;
+		if (prefetch->TryTakeResult(table.GetTableKey(), prefetched, prefetched_publication)) {
+			return ApplyLoadResult(context, table, std::move(prefetched), *prefetched_publication);
+		}
+	}
 	auto publication = ic_catalog.table_request_cache.BeginLoad(table.GetTableKey());
 	return ApplyLoadResult(context, table, ic_catalog.LoadTable(context, schema.namespace_items, table.name), *publication);
 }
