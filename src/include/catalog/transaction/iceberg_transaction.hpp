@@ -149,6 +149,8 @@ public:
 	//! Tables of other formats (see IcebergCatalog::LookupOtherFormatTable) resolved by this transaction, keyed by
 	//! '<schema>.<table>'
 	unordered_map<string, unique_ptr<TableCatalogEntry>> other_format_tables;
+	//! Set once a statement of this transaction wrote to a table of another format, which publishes the write at once
+	bool wrote_other_format_tables = false;
 	//! Keep replaced entries alive for statements already bound in this transaction.
 	vector<unique_ptr<ViewCatalogEntry>> retired_views;
 	//! Catalog view listings, keyed by schema name, with transaction-local lifetime.

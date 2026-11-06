@@ -257,6 +257,10 @@ public:
 	}
 	//! Throws if 'table' is not an Iceberg table, for the statements only Iceberg tables support
 	void VerifyIcebergTable(TableCatalogEntry &table, const string &statement) const;
+	static bool IsIcebergTable(const TableCatalogEntry &table);
+	//! INSERT into a table of another format
+	virtual PhysicalOperator &PlanOtherFormatInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                                LogicalInsert &op, optional_ptr<PhysicalOperator> plan);
 	//! The tables of other formats in a schema, listed after its Iceberg tables
 	virtual void ScanOtherFormatTables(ClientContext &context, IcebergSchemaEntry &schema,
 	                                   const std::function<void(CatalogEntry &)> &callback) {

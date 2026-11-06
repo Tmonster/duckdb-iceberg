@@ -42,6 +42,10 @@ public:
 	void ScanOtherFormatTables(ClientContext &context, IcebergSchemaEntry &schema,
 	                           const std::function<void(CatalogEntry &)> &callback) override;
 	string DescribeOtherFormatTable(const TableCatalogEntry &table) const override;
+	//! Writes the files and registers the partitions while the statement runs: Glue has no transactions, so a
+	//! transaction can't also change Iceberg tables, and a ROLLBACK doesn't undo the insert
+	PhysicalOperator &PlanOtherFormatInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
+	                                        optional_ptr<PhysicalOperator> plan) override;
 
 	string MetastoreName() const override {
 		return "Glue catalog";
@@ -73,6 +77,9 @@ public:
 	//! The partitions of a Hive table (GetPartitions, all pages)
 	vector<GluePartitionInfo> GetPartitions(ClientContext &context, const string &database_name,
 	                                        const string &table_name);
+	//! Register partitions of a Hive table (BatchCreatePartition). Partitions that exist already are skipped.
+	void BatchCreatePartitions(ClientContext &context, const string &database_name, const string &table_name,
+	                           const vector<GluePartitionInput> &partitions);
 	//! Whether a Glue table is an Iceberg table
 	static bool IsIcebergTable(JSONValue table);
 	//! The value of a Glue table's or database's parameter, empty if it isn't set

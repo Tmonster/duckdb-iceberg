@@ -5,6 +5,9 @@
 
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/glue/iceberg_glue_commit.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
+#include "catalog/transaction/iceberg_transaction_update.hpp"
+#include "duckdb/common/exception/transaction_exception.hpp"
 
 namespace duckdb {
 
@@ -247,6 +250,11 @@ string IcebergGlueCatalog::DefaultDatabaseLocation(const string &database_name) 
 
 void IcebergGlueCatalog::VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const {
 	VerifySingleTableUpdate(alter_update);
+	auto &transaction = alter_update.transaction;
+	if (transaction.wrote_other_format_tables) {
+		throw TransactionException("Cannot change an Iceberg table in a transaction that inserted into a Hive table: "
+		                           "the Hive insert is published already, and Glue can't commit both together");
+	}
 }
 
 unique_ptr<IcebergMetastoreCommit> IcebergGlueCatalog::BeginCommit(ClientContext &context) {
