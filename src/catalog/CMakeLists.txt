@@ -1,5 +1,7 @@
 add_subdirectory(catalog_entry)
+add_subdirectory(metastore)
 add_subdirectory(rest)
+add_subdirectory(sql)
 add_subdirectory(transaction)
 
 add_library(

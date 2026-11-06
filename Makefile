@@ -31,6 +31,7 @@ include make/catalogs/lakekeeper.mk
 include make/catalogs/nessie.mk
 include make/catalogs/polaris.mk
 include make/catalogs/mock.mk
+include make/catalogs/sql.mk
 
 # The shared CI workflow calls these standard targets. Finish the native catalog
 # suite before the delegated test recipe, keeping its config scoped to that suite.

@@ -36,6 +36,8 @@ public:
 	void GetColumnNamesAndTypes(vector<string> &names, vector<LogicalType> &types) const;
 	void GetFieldIdValues(child_list_t<Value> &values) const;
 	Value GetFieldIds() const;
+	//! The highest field id of any (nested) column, 0 if there are none
+	int32_t GetMaxFieldId() const;
 
 private:
 	void InvalidateSourceIdMap();

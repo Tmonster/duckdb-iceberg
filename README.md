@@ -18,6 +18,36 @@ of those snapshots: the updates cannot preserve an ID that has not been assigned
 yet. After commit, further updates preserve its assigned ID. Use a business key
 to identify pending rows, rather than relying on their nullable lineage columns.
 
+## SQL catalogs
+
+Besides Iceberg REST catalogs, the extension can attach a catalog that is stored in the tables of a SQL
+database, compatible with the [JDBC catalog](https://iceberg.apache.org/docs/latest/jdbc/) of Iceberg Java
+and the SQL catalog of PyIceberg. There is no catalog server: DuckDB writes the table metadata files itself,
+and stores a pointer to each table's current metadata file in the `iceberg_tables` table.
+
+```sql
+ATTACH 's3://bucket/warehouse' AS lake (
+    TYPE ICEBERG,
+    CATALOG_TYPE 'sql',
+    URI 'duckdb:/path/to/catalog.duckdb'
+);
+```
+
+- The ATTACH path is the warehouse: new tables are created at `<warehouse>/<namespace>/<table>`, or below the
+  namespace's `location` property.
+- `URI` is the database holding the catalog. `duckdb:<path>` is a DuckDB database file. SQLAlchemy and JDBC
+  URIs (`sqlite:///<path>`, `postgresql://...`, `jdbc:sqlite:<path>`, ...) use the DuckDB `sqlite` and
+  `postgres` extensions.
+- `CATALOG_NAME` is the value of the `catalog_name` column, which lets several catalogs share a database. It
+  defaults to the ATTACH alias, so attach the same catalog under another alias with `CATALOG_NAME`.
+- `INIT_CATALOG_TABLES` (default `true`) creates the catalog tables if they don't exist.
+- All schema and table changes of a DuckDB transaction are committed in one transaction of the catalog
+  database. Concurrent commits to the same table are detected and retried as configured by the table's
+  `commit.retry.*` properties.
+- Dropping a table only unregisters it, unless the catalog is attached with `PURGE_REQUESTED true`, which
+  removes the table's files if they are inside the warehouse.
+- Views are not supported yet.
+
 ## Development setup
 
 Clone the repository with its DuckDB and extension tooling submodules:
@@ -93,6 +123,13 @@ make test_debug
 
 make reldebug
 make test_reldebug
+```
+
+The SQL catalog suite runs the catalog-agnostic tests against a SQL catalog stored in a DuckDB file. It needs
+no service:
+
+```shell
+make test_sql_catalog_release
 ```
 
 Use `T` to narrow a Make-based run, or invoke the sqllogictest runner directly:

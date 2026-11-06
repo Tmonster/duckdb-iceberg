@@ -22,10 +22,10 @@ namespace duckdb {
 
 struct IcebergLoadTableResponseBindData : public TableFunctionData {
 	IcebergTableSchemaVersion &table_entry;
-	IcebergRestCatalog &ic_catalog;
+	IcebergCatalog &ic_catalog;
 	IcebergSchemaEntry &ic_schema;
 
-	IcebergLoadTableResponseBindData(IcebergTableSchemaVersion &table_entry, IcebergRestCatalog &ic_catalog,
+	IcebergLoadTableResponseBindData(IcebergTableSchemaVersion &table_entry, IcebergCatalog &ic_catalog,
 	                                 IcebergSchemaEntry &ic_schema)
 	    : table_entry(table_entry), ic_catalog(ic_catalog), ic_schema(ic_schema) {
 	}
@@ -40,7 +40,7 @@ struct IcebergLoadTableResponseGlobalState : public GlobalTableFunctionState {
 };
 
 static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const IcebergLoadTableResponseBindData &bind_data) {
-	auto &ic_catalog = bind_data.ic_catalog;
+	auto &ic_catalog = bind_data.ic_catalog.Cast<IcebergRestCatalog>();
 	auto &ic_schema = bind_data.ic_schema;
 	auto &ic_table_entry = bind_data.table_entry;
 
@@ -65,6 +65,34 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const Iceber
 	return response;
 }
 
+struct IcebergLoadTableResponse {
+	string body;
+	//! The REST request the response was returned for, unset for other catalog types
+	optional<string> url;
+};
+
+static IcebergLoadTableResponse LoadResponse(ClientContext &context, const IcebergLoadTableResponseBindData &bind_data) {
+	IcebergLoadTableResponse result;
+	if (bind_data.ic_catalog.GetIcebergCatalogType() == IcebergCatalogType::REST) {
+		// The response exactly as the server returned it
+		auto response = MakeRequest(context, bind_data);
+		result.body = response->body;
+		result.url = response->url;
+		return result;
+	}
+	auto &table_entry = bind_data.table_entry;
+	auto load_result = bind_data.ic_catalog.LoadTable(context, bind_data.ic_schema.namespace_items,
+	                                                  table_entry.name.GetIdentifierName());
+	if (load_result.error_) {
+		throw IOException("Could not load table '%s': %s", table_entry.name.GetIdentifierName(),
+		                  load_result.error_->_error.message);
+	}
+	JSONWriter writer;
+	writer.SetRoot(load_result.result_->ToJSON(writer));
+	result.body = writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN);
+	return result;
+}
+
 static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &context, TableFunctionBindInput &input,
                                                              vector<LogicalType> &return_types,
                                                              vector<Identifier> &names) {
@@ -81,11 +109,7 @@ static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &cont
 	}
 
 	auto &table_entry = catalog_entry->Cast<IcebergTableSchemaVersion>();
-	auto &iceberg_catalog = table_entry.catalog.Cast<IcebergCatalog>();
-	if (iceberg_catalog.GetIcebergCatalogType() != IcebergCatalogType::REST) {
-		throw InvalidInputException("Table '%s' is not an Iceberg REST catalog table", input_string);
-	}
-	auto &ic_catalog = iceberg_catalog.Cast<IcebergRestCatalog>();
+	auto &ic_catalog = table_entry.catalog.Cast<IcebergCatalog>();
 	auto &ic_schema = table_entry.schema.Cast<IcebergSchemaEntry>();
 
 	auto ret = make_uniq<IcebergLoadTableResponseBindData>(table_entry, ic_catalog, ic_schema);
@@ -145,10 +169,10 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 	}
 	global_state.done = true;
 
-	auto response = MakeRequest(context, bind_data);
+	auto response = LoadResponse(context, bind_data);
 
 	// Parse the response as JSON
-	auto doc = ICUtils::APIResultToDoc(response->body);
+	auto doc = ICUtils::APIResultToDoc(response.body);
 	auto root = doc->GetRoot();
 
 	auto load_result = ICUtils::ParseLoadTableResult(root);
@@ -233,8 +257,12 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 
 	// request_url
 	auto &request_endpoint_vector = output.data[4];
-	FlatVector::GetDataMutable<string_t>(request_endpoint_vector)[0] =
-	    StringVector::AddString(request_endpoint_vector, response->url);
+	if (response.url) {
+		FlatVector::GetDataMutable<string_t>(request_endpoint_vector)[0] =
+		    StringVector::AddString(request_endpoint_vector, *response.url);
+	} else {
+		FlatVector::ValidityMutable(request_endpoint_vector).SetInvalid(0);
+	}
 }
 
 TableFunctionSet IcebergFunctions::GetIcebergLoadTableResponseFunction() {
