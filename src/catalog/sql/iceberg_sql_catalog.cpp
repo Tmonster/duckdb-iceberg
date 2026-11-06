@@ -73,7 +73,7 @@ IcebergSqlCatalogUri IcebergSqlCatalogUri::Parse(const string &uri_p) {
 IcebergSqlCatalog::IcebergSqlCatalog(AttachedDatabase &db_p, AccessMode access_mode,
                                      IcebergAttachOptions &attach_options_p, const optional<Identifier> &default_schema,
                                      IcebergSqlCatalogUri uri_p, string catalog_name_p, bool init_catalog_tables_p)
-    : IcebergCatalog(IcebergCatalogType::SQL, db_p, access_mode, attach_options_p, default_schema),
+    : IcebergMetastoreCatalog(IcebergCatalogType::SQL, db_p, access_mode, attach_options_p, default_schema),
       uri(std::move(uri_p)), catalog_name(std::move(catalog_name_p)), init_catalog_tables(init_catalog_tables_p),
       database_name("__iceberg_sql_" + db_p.GetName().GetIdentifierName()) {
 	// The JDBC catalog separates nested namespaces with '.', table keys follow the stored namespace names
@@ -325,35 +325,10 @@ IcebergListTablesResult IcebergSqlCatalog::ListTables(ClientContext &context, co
 	return result;
 }
 
-IcebergLoadTableResult IcebergSqlCatalog::LoadTable(ClientContext &context, const vector<string> &namespace_items,
-                                                    const string &table_name) {
+string IcebergSqlCatalog::GetMetadataLocation(ClientContext &context, const IcebergMetastoreIdentifier &identifier,
+                                              IcebergMetastoreEntryType type) {
 	Initialize(context);
-	auto connection = Connect();
-	auto rows = Query(*connection,
-	                  StringUtil::Format("SELECT metadata_location FROM %s "
-	                                     "WHERE catalog_name = $1 AND table_namespace = $2 AND table_name = $3%s",
-	                                     CatalogTable(TABLES_TABLE),
-	                                     has_iceberg_type_column ? " AND coalesce(iceberg_type, 'TABLE') = 'TABLE'" : ""),
-	                  {Value(catalog_name), Value(NamespaceName(namespace_items)), Value(table_name)});
-	IcebergLoadTableResult result;
-	if (rows.empty() || rows[0][0].IsNull()) {
-		result.status_ = HTTPStatusCode::NotFound_404;
-		rest_api_objects::IcebergErrorResponse error;
-		error._error.type = "NoSuchTableException";
-		error._error.message = StringUtil::Format("Table does not exist: %s.%s", NamespaceName(namespace_items),
-		                                          table_name);
-		error._error.code = 404;
-		result.error_ = std::move(error);
-		return result;
-	}
-	auto metadata_location = rows[0][0].ToString();
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto load_table_result = make_uniq<rest_api_objects::LoadTableResult>();
-	load_table_result->metadata = IcebergTableMetadata::Parse(metadata_location, fs, "none");
-	load_table_result->metadata_location = metadata_location;
-	result.status_ = HTTPStatusCode::OK_200;
-	result.result_ = std::move(load_table_result);
-	return result;
+	return IcebergSqlMetastoreCommit(*this, Connect()).LoadMetadataLocation(identifier, type);
 }
 
 bool IcebergSqlCatalog::SupportsViews(IcebergViewOperation operation) const {
@@ -402,29 +377,9 @@ string IcebergSqlCatalog::DefaultNamespaceLocation(const vector<string> &namespa
 	return warehouse_root + "/" + StringUtil::Join(namespace_items, "/");
 }
 
-IcebergTable &IcebergSqlCatalog::CreateTable(ClientContext &context, IcebergSchemaEntry &schema,
-                                             const IcebergCreateTableRequest &request) {
-	auto location = request.GetLocation();
-	if (location.empty()) {
-		location = DefaultTableLocation(context, schema.namespace_items, request.GetName());
-	}
-	StringUtil::RTrim(location, "/");
-	auto metadata = request.CreateInitialMetadata(UUID::ToString(UUID::GenerateRandomUUID()), location);
-	auto &table_info = AddCreatedTable(context, IcebergTable(*this, schema, request.GetName(), std::move(metadata)));
-	// The table is created from empty metadata at commit, like a table staged in a REST catalog
-	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
-	auto &transaction_data = table_info.GetOrCreateTransactionData(iceberg_transaction);
-	transaction_data.TableAddAssertCreate();
-	AddCreateTableUpdates(context, table_info);
-	return table_info;
-}
-
-//===--------------------------------------------------------------------===//
-// Commit
-//===--------------------------------------------------------------------===//
-
-void IcebergSqlCatalog::Commit(IcebergTransaction &transaction) {
-	IcebergSqlTransactionCommit(*this, transaction).Commit();
+unique_ptr<IcebergMetastoreCommit> IcebergSqlCatalog::BeginCommit(ClientContext &context) {
+	Initialize(context);
+	return make_uniq<IcebergSqlMetastoreCommit>(*this, Connect());
 }
 
 } // namespace duckdb
