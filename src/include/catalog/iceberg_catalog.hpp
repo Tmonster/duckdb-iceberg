@@ -175,6 +175,10 @@ public:
 	}
 	optional<Identifier> GetDefaultSchema() const override;
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
+	//! Applies IDENTIFIER_CASE to a namespace or table name
+	string FoldIdentifier(const string &name) const;
+	//! Applies IDENTIFIER_CASE to the schema and name parts, keeping the catalog alias as written
+	QualifiedName FoldName(const QualifiedName &name) const;
 
 public:
 	void Initialize(bool load_builtin) override;
@@ -241,6 +245,8 @@ public:
 	//! Add the table described by 'request' to the current transaction, with the updates that create it at commit
 	virtual IcebergTable &CreateTable(ClientContext &context, IcebergSchemaEntry &schema,
 	                                  const IcebergCreateTableRequest &request) = 0;
+	//! Throws if the catalog cannot drop the schema as requested, e.g. with CASCADE
+	virtual void VerifyDropSchema(const DropInfo &info) const;
 	//! Throws if the catalog cannot commit the table updates of 'alter_update' atomically
 	virtual void VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const {
 	}
