@@ -9,11 +9,11 @@
 
 #include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/iceberg_insert.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/transaction/iceberg_transaction_update.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
 
 namespace duckdb {

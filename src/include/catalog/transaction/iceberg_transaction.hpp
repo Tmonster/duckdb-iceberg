@@ -1,0 +1,176 @@
+
+#pragma once
+
+#include "duckdb/transaction/transaction.hpp"
+#include "duckdb/parser/parsed_data/create_view_info.hpp"
+#include "catalog/iceberg_schema_set.hpp"
+#include "catalog/transaction/iceberg_pending_schema_creates.hpp"
+#include "catalog/rest/api/iceberg_retry.hpp"
+#include "catalog/transaction/iceberg_transaction_update.hpp"
+
+namespace duckdb {
+class IcebergCatalog;
+class IcebergTablePrefetch;
+class IcebergSchemaEntry;
+class IcebergTableSchemaVersion;
+
+enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED, RENAMED, MISSING };
+
+struct IcebergTransactionTableState {
+public:
+	IcebergTransactionTableState();
+	explicit IcebergTransactionTableState(shared_ptr<IcebergTable> catalog_table);
+	explicit IcebergTransactionTableState(IcebergTable &&transaction_table);
+
+public:
+	IcebergTable &GetInfo() {
+		if (transaction_table) {
+			return *transaction_table;
+		}
+		if (!catalog_table) {
+			throw InternalException("GetInfo called on IcebergTransactionTableState without a table, status: %d",
+			                        static_cast<uint8_t>(status));
+		}
+		return *catalog_table;
+	}
+	const IcebergTable &GetInfo() const;
+	IcebergTable &GetOrCreateTransactionInfo(IcebergTransaction &transaction);
+
+public:
+	bool IsDroppedOrRenamed() const {
+		return status == IcebergTableStatus::DROPPED || status == IcebergTableStatus::RENAMED;
+	}
+	bool IsMissing() const {
+		return status == IcebergTableStatus::MISSING;
+	}
+	bool IsAlive() const {
+		return status == IcebergTableStatus::ALIVE;
+	}
+	void SetStatus(IcebergTableStatus value) {
+		status = value;
+	}
+
+private:
+	//! The catalog state is retained as the source for lazily materializing transaction-local state.
+	shared_ptr<IcebergTable> catalog_table;
+	//! Lazily materialized transaction-local state. Its stable address is referenced by table updates and schema
+	//! entries.
+	unique_ptr<IcebergTable> transaction_table;
+	IcebergTableStatus status;
+};
+
+struct SchemaPropertyUpdates {
+	case_insensitive_map_t<string> updates;
+	set<string> removals;
+};
+
+class IcebergTransaction : public Transaction {
+public:
+	friend struct IcebergTransactionData;
+	friend struct IcebergTransactionAlterUpdate;
+	friend class IcebergRestTransactionCommit;
+
+	IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context);
+	~IcebergTransaction() override;
+
+public:
+	void Start();
+	void Commit();
+	void Rollback();
+	static IcebergTransaction &Get(ClientContext &context, Catalog &catalog);
+	AccessMode GetAccessMode() const {
+		return access_mode;
+	}
+	//! Whether this transaction buffered any change that has to be published at commit
+	bool HasChanges() const;
+	void InvalidateViewEntry(const string &view_key);
+	IcebergCatalog &GetCatalog();
+	//! LoadTable requests scheduled ahead of binding for the tables a query references, created on first use
+	IcebergTablePrefetch &GetTablePrefetch(ClientContext &context);
+	optional_ptr<IcebergTablePrefetch> TryGetTablePrefetch();
+	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
+	IcebergTransactionTableState &SetCatalogTableState(shared_ptr<IcebergTable> table);
+	IcebergTransactionTableState &SetTransactionTableState(const string &table_key, IcebergTable &&table,
+	                                                       IcebergTableStatus status);
+	IcebergTransactionTableState &GetOrCreateTransactionTableState(const IcebergTable &table);
+	IcebergTransactionTableState &SetLatestTableState(const string &table_key, IcebergTableStatus status);
+	bool StartedBefore(timestamp_ms_t timestamp_ms) const;
+	IcebergTransactionAlterUpdate &GetOrCreateAlter();
+	IcebergTable &DeleteTable(IcebergTable &table);
+	IcebergTable &RenameTable(IcebergTable &table, const string &new_name);
+
+public:
+	//! Set while a MERGE INTO is planned: its UPDATE and DELETE actions are governed by write.merge.mode, not by
+	//! write.update.mode and write.delete.mode
+	bool planning_merge_into = false;
+
+private:
+	bool HasTableUpdate() const;
+	IcebergTransactionAlterUpdate *GetAlterUpdate();
+	const IcebergTransactionAlterUpdate *GetAlterUpdate() const;
+	void CleanupMetadataFiles(ClientContext &context, const vector<string> &paths);
+	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, const unordered_set<string> &table_keys,
+	                        ClientContext &context);
+	void CleanupFiles();
+	//! Evict the touched tables' cached LoadTableResult so a retry after a failed commit (e.g. a 409
+	//! conflict) doesn't keep reusing the same stale metadata.
+	void EvictCachedTables();
+	//! Commit outcome unknown (5xx / no HTTP status); CleanupFiles() then keeps the written files.
+	bool commit_state_unknown = false;
+
+private:
+	DatabaseInstance &db;
+	IcebergCatalog &catalog;
+	unique_ptr<IcebergTablePrefetch> table_prefetch;
+	AccessMode access_mode;
+
+public:
+	//! Process-independent identity for rejecting scan copies outside their originating transaction.
+	const hugeint_t scan_serialization_id;
+
+	//! Schemas referenced by this transaction that have to stay alive for the duration of the transaction.
+	unordered_map<string, shared_ptr<IcebergSchemaEntry>> schemas;
+	//! Schemas staged by this transaction. These are separate from catalog-referenced schemas so both generations stay
+	//! alive when a transaction creates a schema after referencing a stale entry with the same name.
+	IcebergPendingSchemaCreates created_schemas;
+	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.
+	unordered_map<string, shared_ptr<IcebergTable>> tables;
+	//! The visible state of every resolved table in this transaction.
+	unordered_map<string, IcebergTransactionTableState> current_table_data;
+	//! Declared after the schema and table states so update references are destroyed before the referenced states.
+	IcebergTransactionUpdate transaction_update;
+
+	//! views that have been created in this transaction, to be committed on commit.
+	//! keyed by view_key (schema_namespace + view_name)
+	unordered_map<string, unique_ptr<CreateViewInfo>> created_views;
+	//! Resolved views belong to this transaction, never to the shared schema cache.
+	unordered_map<string, unique_ptr<ViewCatalogEntry>> views;
+	//! Keep replaced entries alive for statements already bound in this transaction.
+	vector<unique_ptr<ViewCatalogEntry>> retired_views;
+	//! Catalog view listings, keyed by schema name, with transaction-local lifetime.
+	unordered_map<string, unordered_set<string>> listed_views;
+	//! views that have been deleted in this transaction, to be deleted on commit.
+	struct DeletedViewInfo {
+		vector<string> namespace_items;
+		string view_name;
+	};
+	unordered_map<string, DeletedViewInfo> deleted_views;
+
+	unordered_set<string> deleted_schemas;
+
+	bool called_list_schemas = false;
+	//! Set of schemas that this transaction has listed tables for
+	unordered_set<string> listed_schemas;
+
+	unordered_set<string> looked_up_entries;
+	mutex lock;
+	//! Serialize rewrite finalization, including the initialization of transaction table state.
+	mutex rewrite_commit_lock;
+
+	unordered_map<string, SchemaPropertyUpdates> schema_property_updates;
+};
+
+void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
+                      const std::function<void(IcebergTable &)> &callback);
+
+} // namespace duckdb

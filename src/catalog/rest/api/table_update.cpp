@@ -1,6 +1,6 @@
 #include "catalog/rest/api/table_update.hpp"
 #include "duckdb/common/exception.hpp"
-#include "catalog/rest/iceberg_table_set.hpp"
+#include "catalog/iceberg_table_set.hpp"
 
 namespace duckdb {
 

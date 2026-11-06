@@ -4,12 +4,12 @@
 #include "duckdb/common/enums/on_entry_not_found.hpp"
 #include "duckdb/common/exception.hpp"
 
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/iceberg_schema_set.hpp"
-#include "catalog/rest/iceberg_table_set.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/iceberg_schema_set.hpp"
+#include "catalog/iceberg_table_set.hpp"
 
 namespace duckdb {
 

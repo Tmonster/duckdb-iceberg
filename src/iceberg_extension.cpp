@@ -15,8 +15,8 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb.hpp"
 
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_manager.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction_manager.hpp"
 #include "function/iceberg_functions.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"

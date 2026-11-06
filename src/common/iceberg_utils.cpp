@@ -11,8 +11,8 @@
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "duckdb/common/operator/add.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "duckdb/catalog/catalog_entry_retriever.hpp"
 
