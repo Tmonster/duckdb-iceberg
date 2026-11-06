@@ -151,6 +151,13 @@ HTTPHeaders AWSInput::SignRequest(RequestType request_type, ClientContext &conte
 	if (!session_token.empty()) {
 		signed_headers.emplace_back("x-amz-security-token", session_token);
 	}
+	// The operation of an AWS JSON protocol request (e.g. the Glue API), which AWS requires to be signed
+	if (headers.HasHeader("X-Amz-Target")) {
+		auto target = headers.GetHeaderValue("X-Amz-Target");
+		if (!target.empty()) {
+			signed_headers.emplace_back("X-Amz-Target", std::move(target));
+		}
+	}
 	if (headers.HasHeader("X-Iceberg-Access-Delegation")) {
 		auto access_delegation = headers.GetHeaderValue("X-Iceberg-Access-Delegation");
 		if (!access_delegation.empty()) {
