@@ -508,7 +508,14 @@ vector<string> IcebergClientCommit::Compare(const IcebergTableMetadata &expected
 	check(expected.default_sort_order_id == actual.default_sort_order_id, "default-sort-order-id",
 	      optional_idx_to_string(expected.default_sort_order_id),
 	      optional_idx_to_string(actual.default_sort_order_id));
-	check(expected.current_snapshot_id == actual.current_snapshot_id, "current-snapshot-id",
+	auto expected_statistics = expected.StatisticsToWrite();
+	auto actual_statistics = actual.StatisticsToWrite();
+	check(expected_statistics == actual_statistics, "statistics", expected_statistics, actual_statistics);
+	auto expected_partition_statistics = expected.PartitionStatisticsToWrite();
+	auto actual_partition_statistics = actual.PartitionStatisticsToWrite();
+	check(expected_partition_statistics == actual_partition_statistics, "partition-statistics",
+	      expected_partition_statistics, actual_partition_statistics);
+		check(expected.current_snapshot_id == actual.current_snapshot_id, "current-snapshot-id",
 	      optional_to_string(expected.current_snapshot_id), optional_to_string(actual.current_snapshot_id));
 	if (expected.iceberg_version >= 3) {
 		check(expected.next_row_id == actual.next_row_id, "next-row-id", optional_to_string(expected.next_row_id),
