@@ -1,0 +1,54 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/sql/commit_outcome.test
+# description: A commit whose outcome the client didn't see is checked against the catalog, and keeps its files when that fails
+# group: [sql]
+
+require-env CATALOG_TEST_CONFIG_SETUP sql
+
+include test/sql/init_requires
+
+statement ok
+ATTACH '{TEST_DIR}/outcome_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'duckdb:{TEST_DIR}/outcome_catalog.duckdb');
+
+statement ok
+CREATE SCHEMA cat.ns;
+
+statement ok
+CREATE TABLE cat.ns.t AS SELECT 1 AS i;
+
+# The database committed, but the client lost the response: the pointer shows the commit was applied
+statement ok
+SET iceberg_test_metastore_commit_fault = 'lose_response';
+
+statement ok
+INSERT INTO cat.ns.t VALUES (2);
+
+statement ok
+RESET iceberg_test_metastore_commit_fault;
+
+query I
+SELECT sum(i) FROM cat.ns.t;
+----
+3
+
+# The response is lost and the catalog can't be read back either: the outcome is unknown
+statement ok
+SET iceberg_test_metastore_commit_fault = 'unreachable';
+
+statement error
+INSERT INTO cat.ns.t VALUES (4);
+----
+commit state unknown
+
+statement ok
+RESET iceberg_test_metastore_commit_fault;
+
+# The commit was in fact applied, and the files it references were kept
+query I
+SELECT sum(i) FROM cat.ns.t;
+----
+7
+
+query I
+SELECT count(*) FROM cat.ns.t WHERE i = 4;
+----
+1

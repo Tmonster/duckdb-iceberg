@@ -434,6 +434,25 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	if (table_metadata.refs) {
 		res.refs = table_metadata.refs->Copy();
 	}
+	// Statistics files of other engines, kept as they are
+	if (table_metadata.statistics && !table_metadata.statistics->empty()) {
+		JSONWriter writer;
+		auto array = writer.CreateArray();
+		for (auto &file : *table_metadata.statistics) {
+			array.Append(file.ToJSON(writer));
+		}
+		writer.SetRoot(array);
+		res.statistics_json = writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN);
+	}
+	if (table_metadata.partition_statistics && !table_metadata.partition_statistics->empty()) {
+		JSONWriter writer;
+		auto array = writer.CreateArray();
+		for (auto &file : *table_metadata.partition_statistics) {
+			array.Append(file.ToJSON(writer));
+		}
+		writer.SetRoot(array);
+		res.partition_statistics_json = writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN);
+	}
 	if (table_metadata.snapshot_log) {
 		res.snapshot_log.reserve(table_metadata.snapshot_log->value.size());
 		for (auto &entry : table_metadata.snapshot_log->value) {
@@ -551,6 +570,8 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	res.table_properties = table_properties;
 	res.metadata_log = metadata_log;
 	res.current_schema_id = current_schema_id;
+	res.statistics_json = statistics_json;
+	res.partition_statistics_json = partition_statistics_json;
 	res.file_secret = file_secret;
 	res.file_secret_value = file_secret_value;
 	return res;
@@ -773,6 +794,43 @@ string IcebergTableMetadata::ToJSON() const {
 		// Required since v3 (row lineage)
 		root_obj.Add("next-row-id", writer.CreateSignedInteger(next_row_id ? *next_row_id : 0));
 	}
+	// Keep the statistics files of other engines, except those of snapshots that no longer exist
+	unique_ptr<JSONDocument> statistics_doc;
+	unique_ptr<JSONDocument> partition_statistics_doc;
+	auto add_statistics = [&](const char *key, const string &json, unique_ptr<JSONDocument> &doc) {
+		auto filtered = StatisticsJSON(json);
+		if (filtered.empty()) {
+			return;
+		}
+		doc = JSONDocument::Parse(filtered.c_str(), filtered.size(), JSONReadFlags::ALLOW_INF_AND_NAN);
+		root_obj.Add(key, writer.CreateCopy(doc->GetRoot()));
+	};
+	add_statistics("statistics", statistics_json, statistics_doc);
+	add_statistics("partition-statistics", partition_statistics_json, partition_statistics_doc);
+	return writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN);
+}
+
+string IcebergTableMetadata::StatisticsJSON(const string &json) const {
+	if (json.empty()) {
+		return string();
+	}
+	auto doc = JSONDocument::Parse(json.c_str(), json.size(), JSONReadFlags::ALLOW_INF_AND_NAN);
+	JSONWriter writer;
+	auto array = writer.CreateArray();
+	idx_t count = 0;
+	doc->GetRoot().IterateArray([&](JSONValue file) {
+		auto snapshot_id = file.GetMember("snapshot-id");
+		if (snapshot_id.IsValid() && snapshot_id.IsInteger() &&
+		    snapshots.find(snapshot_id.GetSignedInteger()) == snapshots.end()) {
+			return;
+		}
+		array.Append(writer.CreateCopy(file));
+		count++;
+	});
+	if (count == 0) {
+		return string();
+	}
+	writer.SetRoot(array);
 	return writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN);
 }
 
