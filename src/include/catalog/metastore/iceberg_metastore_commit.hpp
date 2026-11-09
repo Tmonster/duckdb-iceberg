@@ -18,13 +18,39 @@ struct IcebergRetryConfig;
 //! commit on the table's new metadata, unless a change of the attempt may be visible already.
 class IcebergMetastoreTransactionCommit {
 public:
+	//! Test-only setting injecting a lost response after a metastore change, see InjectedFault
+	static constexpr const char *FAULT_SETTING = "iceberg_test_metastore_commit_fault";
+
+public:
 	IcebergMetastoreTransactionCommit(IcebergMetastoreCatalog &catalog, IcebergTransaction &transaction);
 
 public:
 	void Commit();
 
 private:
+	//! A table or view change of the current attempt, to check what was applied after an error without a definite
+	//! outcome
+	struct AttemptedEntry {
+		IcebergMetastoreIdentifier identifier;
+		IcebergMetastoreEntryType type;
+		//! Empty for a create
+		string base_location;
+		string new_location;
+	};
+	enum class EntryState : uint8_t { APPLIED, NOT_APPLIED, UNKNOWN };
+
 	void CommitWithRetries(ClientContext &context);
+	//! Run 'change' of an entry. If it fails without a definite outcome, a metastore without transactions is asked
+	//! whether the change was applied: if so the change succeeded, if that can't be determined the commit state is
+	//! unknown (the files are kept and the commit is not retried).
+	void PublishEntry(IcebergMetastoreCommit &commit, ClientContext &context,
+	                  const IcebergMetastoreIdentifier &identifier, IcebergMetastoreEntryType type,
+	                  const string &base_location, const string &new_location, const std::function<void()> &change);
+	//! Finish the attempt. If a metastore with transactions fails to confirm the commit (e.g. a lost connection), its
+	//! entries are read back to tell a commit from a rollback.
+	void FinishAttempt(IcebergMetastoreCommit &commit, ClientContext &context);
+	EntryState ReconcileEntry(ClientContext &context, const AttemptedEntry &entry);
+	[[noreturn]] void ThrowOutcomeUnknown(IcebergMetastoreCommit &commit, const ErrorData &error, const string &what);
 	void CreateNamespaces(IcebergMetastoreCommit &commit);
 	void UpdateNamespaceProperties(IcebergMetastoreCommit &commit);
 	void CommitTables(IcebergMetastoreCommit &commit, IcebergTransactionAlterUpdate &alter_update,
@@ -50,6 +76,8 @@ private:
 	vector<string> written_files;
 	//! Updates of the in-memory catalog state, applied once the attempt is published
 	vector<std::function<void()>> on_commit;
+	//! The table and view changes of the current attempt
+	vector<AttemptedEntry> attempted_entries;
 };
 
 } // namespace duckdb
