@@ -290,11 +290,15 @@ void IcebergGlueMetastoreCommit::SwapMetadataLocation(const IcebergMetastoreIden
 	body.AddString("DatabaseName", IcebergGlueCatalog::DatabaseName(identifier.namespace_items));
 	body.Add("TableInput",
 	         IcebergTableInput(request, &table, identifier.name, new_location, base_location, metadata));
-	// Glue rejects the update if the table changed since this version was read
+	// Glue rejects the update if the table changed since this version was read. Without a VersionId there is no
+	// optimistic lock, so the update is refused rather than risking a lost concurrent change.
 	auto version_id = table.GetMember("VersionId");
-	if (version_id.IsValid() && version_id.IsString()) {
-		body.AddString("VersionId", version_id.GetString());
+	if (!version_id.IsValid() || !version_id.IsString() || version_id.GetString().empty()) {
+		throw NotImplementedException("Cannot commit to Glue table %s: Glue returned no VersionId for it, which the "
+		                              "commit needs to detect concurrent changes",
+		                              identifier.ToString());
 	}
+	body.AddString("VersionId", version_id.GetString());
 	try {
 		catalog.GetClient().Call(context, "UpdateTable", request, body);
 	} catch (IcebergGlueException &ex) {

@@ -43,6 +43,135 @@ bool CreatesTable(const rest_api_objects::CommitTableRequest &request) {
 
 } // namespace
 
+namespace {
+
+//! Failures that are certain not to have changed the metastore: a rejected requirement, a conflict, a missing or
+//! existing entry, an unsupported operation. Anything else (a lost response, a server error) may have been applied.
+bool IsDefinitiveFailure(const ErrorData &error) {
+	switch (error.Type()) {
+	case ExceptionType::TRANSACTION:
+	case ExceptionType::CATALOG:
+	case ExceptionType::CONSTRAINT:
+	case ExceptionType::NOT_IMPLEMENTED:
+	case ExceptionType::INVALID_INPUT:
+	case ExceptionType::INVALID_CONFIGURATION:
+	case ExceptionType::BINDER:
+	case ExceptionType::PERMISSION:
+		return true;
+	default:
+		return false;
+	}
+}
+
+//! Test hook: 'lose_response' fails after an entry change (or Finish) succeeded, 'unreachable' also fails the check
+//! of what was applied
+string InjectedFault(ClientContext &context) {
+	Value setting;
+	if (context.TryGetCurrentSetting(IcebergMetastoreTransactionCommit::FAULT_SETTING, setting) && !setting.IsNull()) {
+		return setting.ToString();
+	}
+	return string();
+}
+
+} // namespace
+
+IcebergMetastoreTransactionCommit::EntryState
+IcebergMetastoreTransactionCommit::ReconcileEntry(ClientContext &context, const AttemptedEntry &entry) {
+	if (InjectedFault(context) == "unreachable") {
+		throw IOException("Injected fault: the metastore is unreachable");
+	}
+	auto current = catalog.GetMetadataLocation(context, entry.identifier, entry.type);
+	if (current == entry.new_location) {
+		return EntryState::APPLIED;
+	}
+	if (current == entry.base_location) {
+		return EntryState::NOT_APPLIED;
+	}
+	return EntryState::UNKNOWN;
+}
+
+void IcebergMetastoreTransactionCommit::ThrowOutcomeUnknown(IcebergMetastoreCommit &commit, const ErrorData &error,
+                                                            const string &what) {
+	// The change may be visible: keep every file it may reference, and don't retry it
+	commit.MarkPublished();
+	throw IOException("Iceberg %s commit state unknown: %s failed with \"%s\", and whether it was applied could not "
+	                  "be determined. The files the commit wrote are kept.",
+	                  catalog.MetastoreName(), what, error.RawMessage());
+}
+
+void IcebergMetastoreTransactionCommit::PublishEntry(IcebergMetastoreCommit &commit, ClientContext &context,
+                                                     const IcebergMetastoreIdentifier &identifier,
+                                                     IcebergMetastoreEntryType type, const string &base_location,
+                                                     const string &new_location, const std::function<void()> &change) {
+	AttemptedEntry entry {identifier, type, base_location, new_location};
+	attempted_entries.push_back(entry);
+	try {
+		change();
+		if (!commit.IsAtomic() && !InjectedFault(context).empty()) {
+			throw IOException("Injected fault: the response to the change of %s was lost", identifier.ToString());
+		}
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		// A metastore with transactions publishes nothing before Finish
+		if (commit.IsAtomic() || IsDefinitiveFailure(error)) {
+			throw;
+		}
+		EntryState state;
+		try {
+			state = ReconcileEntry(context, entry);
+		} catch (std::exception &) {
+			state = EntryState::UNKNOWN;
+		}
+		if (state == EntryState::NOT_APPLIED) {
+			throw;
+		}
+		if (state == EntryState::UNKNOWN) {
+			ThrowOutcomeUnknown(commit, error, "the change of " + identifier.ToString());
+		}
+		DUCKDB_LOG(context, IcebergLogType, "Iceberg %s change of %s was applied although it reported \"%s\"",
+		           catalog.MetastoreName(), identifier.ToString(), error.RawMessage());
+	}
+	OnEntryChanged(commit);
+}
+
+void IcebergMetastoreTransactionCommit::FinishAttempt(IcebergMetastoreCommit &commit, ClientContext &context) {
+	try {
+		commit.Finish();
+		if (commit.IsAtomic() && !InjectedFault(context).empty()) {
+			throw IOException("Injected fault: the response to the commit was lost");
+		}
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		// A metastore without transactions published its changes as they were made
+		if (!commit.IsAtomic() || IsDefinitiveFailure(error)) {
+			throw;
+		}
+		// The database may have committed although the client saw an error (e.g. a lost connection)
+		if (attempted_entries.empty()) {
+			ThrowOutcomeUnknown(commit, error, "the commit");
+		}
+		idx_t applied = 0;
+		idx_t not_applied = 0;
+		try {
+			for (auto &entry : attempted_entries) {
+				auto state = ReconcileEntry(context, entry);
+				applied += state == EntryState::APPLIED;
+				not_applied += state == EntryState::NOT_APPLIED;
+			}
+		} catch (std::exception &) {
+			ThrowOutcomeUnknown(commit, error, "the commit");
+		}
+		if (not_applied == attempted_entries.size()) {
+			throw;
+		}
+		if (applied != attempted_entries.size()) {
+			ThrowOutcomeUnknown(commit, error, "the commit");
+		}
+		DUCKDB_LOG(context, IcebergLogType, "Iceberg %s commit was applied although it reported \"%s\"",
+		           catalog.MetastoreName(), error.RawMessage());
+	}
+}
+
 void IcebergMetastoreTransactionCommit::Commit() {
 	if ((!transaction.created_views.empty() && !catalog.SupportsViews(IcebergViewOperation::CREATE)) ||
 	    (!transaction.deleted_views.empty() && !catalog.SupportsViews(IcebergViewOperation::LOAD))) {
@@ -87,6 +216,7 @@ void IcebergMetastoreTransactionCommit::CommitWithRetries(ClientContext &context
 		auto commit = catalog.BeginCommit(context);
 		written_files.clear();
 		on_commit.clear();
+		attempted_entries.clear();
 		IcebergRetryConfig retry_config;
 		bool retryable = false;
 		unordered_set<string> table_keys;
@@ -108,7 +238,7 @@ void IcebergMetastoreTransactionCommit::CommitWithRetries(ClientContext &context
 			DropViews(*commit);
 			CreateViews(*commit, context);
 			DropNamespaces(*commit);
-			commit->Finish();
+			FinishAttempt(*commit, context);
 		} catch (TransactionException &ex) {
 			// A requirement that no longer holds, or a concurrent change to the same entry
 			ErrorData error(ex);
@@ -222,13 +352,16 @@ void IcebergMetastoreTransactionCommit::CommitTables(IcebergMetastoreCommit &com
 			written_files.push_back(metadata_location);
 		}
 
-		if (creates_table) {
-			commit.CreateEntry(identifier, IcebergMetastoreEntryType::TABLE, metadata_location, metadata);
-		} else {
-			commit.SwapMetadataLocation(identifier, IcebergMetastoreEntryType::TABLE, base_location,
-			                            metadata_location, metadata);
-		}
-		OnEntryChanged(commit);
+		PublishEntry(commit, context, identifier, IcebergMetastoreEntryType::TABLE, base_location, metadata_location,
+		             [&]() {
+			             if (creates_table) {
+				             commit.CreateEntry(identifier, IcebergMetastoreEntryType::TABLE, metadata_location,
+				                                metadata);
+			             } else {
+				             commit.SwapMetadataLocation(identifier, IcebergMetastoreEntryType::TABLE, base_location,
+				                                         metadata_location, metadata);
+			             }
+		             });
 		if (catalog.attach_options.max_table_staleness_micros.IsValid()) {
 			on_commit.push_back([this, &table_info]() { catalog.table_request_cache.EvictIfCurrent(table_info); });
 		}
