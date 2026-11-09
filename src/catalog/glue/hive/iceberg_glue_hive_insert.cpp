@@ -118,8 +118,12 @@ static unique_ptr<Expression> CreatePartitionPath(ClientContext &context, Iceber
 			check.when_expr = std::move(conjunction);
 		}
 		if (relative_path.empty()) {
-			// the copy rejects a partition path that is not below its target
-			check.then_expr = make_uniq<BoundConstantExpression>(Value(partition.location));
+			// The COPY writes below the table location only. Refuse before anything is written, rather than failing
+			// part way through a statement whose other partitions were published already.
+			throw NotImplementedException(
+			    "Cannot INSERT into %s: its partition [%s] is registered at '%s', outside the table location '%s', "
+			    "and DuckDB only writes below the table location",
+			    table.DescribeForError(), StringUtil::Join(partition.values, ", "), partition.location, location);
 		} else {
 			check.then_expr = make_uniq<BoundConstantExpression>(Value(relative_path));
 			partition_directories.emplace(location + "/" + relative_path, partition.values);
@@ -139,6 +143,12 @@ PhysicalOperator &IcebergGlueHiveInsert::PlanWrite(ClientContext &context, Physi
 	// Ask Glue for the current definition: the location (and the format) may have changed since the entry was
 	// created, e.g. through ALTER TABLE ... SET LOCATION
 	auto table_info = table.RefreshTableInfo(context);
+	// Other engines read a bucketed table assuming every file holds one bucket, named by its bucket number
+	if (table_info.IsBucketed()) {
+		throw NotImplementedException("Cannot INSERT into %s: it is bucketed (%s), and DuckDB doesn't write the "
+		                              "bucketed layout",
+		                              table.DescribeForError(), table_info.DescribeBucketing());
+	}
 	auto location = table_info.location;
 	StringUtil::RTrim(location, "/");
 	// object stores have no directories, a local table location may not exist yet

@@ -92,3 +92,41 @@ def test_insert_into_hive_tables(unittest_binary, print_unittest_stdin, glue, re
         assert partition["StorageDescriptor"]["Location"] == str(hive / "orders" / f"year={year}" / f"region={region_value}")
         assert partition["StorageDescriptor"]["SerdeInfo"]["SerializationLibrary"].endswith("ParquetHiveSerDe")
     assert any(Path(hive / "orders" / "year=2024" / "region=eu").iterdir())
+
+
+def test_insert_refuses_unsupported_hive_layouts(unittest_binary, print_unittest_stdin, glue, region, tmp_path):
+    hive = tmp_path / "hive"
+    glue.create_database(DatabaseInput={"Name": "sales"})
+    # A bucketed table: other engines expect one file per bucket, named by its bucket number
+    glue.create_table(
+        DatabaseName="sales",
+        TableInput={
+            "Name": "bucketed",
+            "TableType": "EXTERNAL_TABLE",
+            "StorageDescriptor": {
+                "Location": str(hive / "bucketed"),
+                "Columns": [{"Name": "id", "Type": "int"}],
+                "SerdeInfo": {"SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"},
+                "BucketColumns": ["id"],
+                "NumberOfBuckets": 4,
+            },
+        },
+    )
+    # A partitioned table with a partition registered outside the table location
+    create_hive_table(glue, "external", hive / "external", [("id", "int")], partition_keys=[("year", "int")])
+    glue.batch_create_partition(
+        DatabaseName="sales",
+        TableName="external",
+        PartitionInputList=[{"Values": ["2020"], "StorageDescriptor": {"Location": str(tmp_path / "elsewhere")}}],
+    )
+    (tmp_path / "elsewhere").mkdir()
+
+    with DuckDBUnittestRunner(unittest_binary, test_config=GLUE_CONFIG, print_stdin=print_unittest_stdin) as test:
+        attach(test, region, tmp_path / "warehouse")
+        test.statement_error("INSERT INTO glue.sales.bucketed VALUES (1)", "it is bucketed")
+        # Refused before anything is written, also for rows of other partitions
+        test.statement_error("INSERT INTO glue.sales.external VALUES (1, 2024)", "outside the table location")
+        test.query("I", "SELECT count(*) FROM glue.sales.external", [(0,)])
+
+    assert not (hive / "bucketed").exists() or not any((hive / "bucketed").iterdir())
+    assert not (hive / "external").exists() or not any((hive / "external").rglob("*.parquet"))
