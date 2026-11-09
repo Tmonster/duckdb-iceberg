@@ -1,0 +1,60 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/glue/commit_outcome.test
+# description: A Glue update whose response is lost is checked with GetTable, and keeps its files when that fails
+# group: [glue]
+
+require-env CATALOG_TEST_CONFIG_SETUP glue
+
+include test/sql/init_requires
+
+statement ok
+CREATE SCHEMA my_datalake.outcome_ns;
+
+statement ok
+CREATE TABLE my_datalake.outcome_ns.t AS SELECT 1 AS i;
+
+# Glue applied UpdateTable, but the response was lost: GetTable shows the update was applied
+statement ok
+SET iceberg_test_metastore_commit_fault = 'lose_response';
+
+statement ok
+INSERT INTO my_datalake.outcome_ns.t VALUES (2);
+
+statement ok
+RESET iceberg_test_metastore_commit_fault;
+
+query I
+SELECT sum(i) FROM my_datalake.outcome_ns.t;
+----
+3
+
+# The response is lost and Glue can't be asked either: the outcome is unknown, and the files are kept
+statement ok
+SET iceberg_test_metastore_commit_fault = 'unreachable';
+
+statement error
+INSERT INTO my_datalake.outcome_ns.t VALUES (4);
+----
+commit state unknown
+
+statement ok
+RESET iceberg_test_metastore_commit_fault;
+
+query I
+SELECT sum(i) FROM my_datalake.outcome_ns.t;
+----
+7
+
+# A lost response to CreateTable is checked the same way
+statement ok
+SET iceberg_test_metastore_commit_fault = 'lose_response';
+
+statement ok
+CREATE TABLE my_datalake.outcome_ns.created AS SELECT 5 AS i;
+
+statement ok
+RESET iceberg_test_metastore_commit_fault;
+
+query I
+SELECT sum(i) FROM my_datalake.outcome_ns.created;
+----
+5
