@@ -731,6 +731,8 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	//! A MERGE plans its delete action through PlanDeleteOperation, which applies write.merge.mode instead
 	if (!op.return_chunk && !irc_transaction.planning_merge_into) {
+		//! The table can be of another format (e.g. a Hive table in Glue): refuse it before treating it as Iceberg
+		VerifyIcebergTable(op.table, "DELETE from");
 		auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
 		auto &alter = irc_transaction.GetOrCreateAlter();
 		auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
