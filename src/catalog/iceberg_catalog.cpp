@@ -1,4 +1,5 @@
 #include "catalog/iceberg_catalog.hpp"
+#include "duckdb/planner/operator/logical_insert.hpp"
 
 #include "duckdb/storage/database_size.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -139,8 +140,17 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
 }
 
+bool IcebergCatalog::IsIcebergTable(const TableCatalogEntry &table) {
+	return dynamic_cast<const IcebergTableSchemaVersion *>(&table) != nullptr;
+}
+
+PhysicalOperator &IcebergCatalog::PlanOtherFormatInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                        LogicalInsert &op, optional_ptr<PhysicalOperator> plan) {
+	throw NotImplementedException("Cannot INSERT into %s", DescribeOtherFormatTable(op.table));
+}
+
 void IcebergCatalog::VerifyIcebergTable(TableCatalogEntry &table, const string &statement) const {
-	if (!dynamic_cast<IcebergTableSchemaVersion *>(&table)) {
+	if (!IsIcebergTable(table)) {
 		throw NotImplementedException("Cannot %s %s", statement, DescribeOtherFormatTable(table));
 	}
 }

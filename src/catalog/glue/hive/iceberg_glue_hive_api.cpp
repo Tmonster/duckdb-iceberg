@@ -4,6 +4,7 @@
 #include "duckdb/logging/logger.hpp"
 
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/glue/hive/iceberg_glue_hive_insert.hpp"
 #include "catalog/glue/hive/iceberg_glue_hive_table.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
 
@@ -141,6 +142,70 @@ vector<GluePartitionInfo> IcebergGlueCatalog::GetPartitions(ClientContext &conte
 	return result;
 }
 
+void IcebergGlueCatalog::BatchCreatePartitions(ClientContext &context, const string &database_name,
+                                               const string &table_name,
+                                               const vector<GluePartitionInput> &partitions) {
+	if (partitions.empty()) {
+		return;
+	}
+	// A partition carries its own StorageDescriptor: the table's, with the partition's location
+	IcebergMetastoreIdentifier identifier;
+	identifier.namespace_items.push_back(database_name);
+	identifier.name = table_name;
+	auto table_response = GetTable(context, identifier);
+	if (!table_response) {
+		throw CatalogException("Glue table '%s.%s' no longer exists", database_name, table_name);
+	}
+	auto table_descriptor = table_response->GetRoot().GetMember("Table").GetMember("StorageDescriptor");
+
+	// BatchCreatePartition accepts at most 100 partitions per call
+	constexpr idx_t BATCH_SIZE = 100;
+	for (idx_t offset = 0; offset < partitions.size(); offset += BATCH_SIZE) {
+		JSONWriter request;
+		auto body = request.CreateObject();
+		body.AddString("DatabaseName", database_name);
+		body.AddString("TableName", table_name);
+		auto inputs = request.CreateArray();
+		for (idx_t i = offset; i < MinValue<idx_t>(offset + BATCH_SIZE, partitions.size()); i++) {
+			auto &partition = partitions[i];
+			auto input = request.CreateObject();
+			auto values = request.CreateArray();
+			for (auto &value : partition.values) {
+				values.AppendString(value);
+			}
+			input.Add("Values", values);
+			auto descriptor = request.CreateObject();
+			if (table_descriptor.IsValid() && table_descriptor.IsObject()) {
+				table_descriptor.IterateObject([&](const string &key, JSONValue value) {
+					if (key != "Location") {
+						descriptor.Add(key, request.CreateCopy(value));
+					}
+				});
+			}
+			descriptor.AddString("Location", partition.location);
+			input.Add("StorageDescriptor", descriptor);
+			inputs.Append(input);
+		}
+		body.Add("PartitionInputList", inputs);
+		auto response = client.Call(context, "BatchCreatePartition", request, body);
+		auto errors = response->GetRoot().GetMember("Errors");
+		if (!errors.IsValid() || !errors.IsArray()) {
+			continue;
+		}
+		errors.IterateArray([&](JSONValue error) {
+			auto detail = error.GetMember("ErrorDetail");
+			auto code = StringMember(detail, "ErrorCode");
+			if (code == "AlreadyExistsException") {
+				// appending to an existing partition
+				return;
+			}
+			throw IOException("Glue BatchCreatePartition '%s.%s' failed for partition [%s]: %s %s", database_name,
+			                  table_name, StringUtil::Join(Strings(error, "PartitionValues"), ", "), code,
+			                  StringMember(detail, "ErrorMessage"));
+		});
+	}
+}
+
 optional_ptr<CatalogEntry> IcebergGlueCatalog::LookupOtherFormatTable(ClientContext &context,
                                                                       IcebergSchemaEntry &schema,
                                                                       const string &table_name) {
@@ -221,6 +286,23 @@ void IcebergGlueCatalog::ScanOtherFormatTables(ClientContext &context, IcebergSc
 	for (auto &entry : entries) {
 		callback(entry.get());
 	}
+}
+
+PhysicalOperator &IcebergGlueCatalog::PlanOtherFormatInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                            LogicalInsert &op, optional_ptr<PhysicalOperator> plan) {
+	auto hive_table = IcebergGlueHiveTable::TryGet(op.table);
+	if (!hive_table) {
+		return IcebergMetastoreCatalog::PlanOtherFormatInsert(context, planner, op, plan);
+	}
+	auto &transaction = IcebergTransaction::Get(context, *this);
+	if (transaction.HasChanges()) {
+		throw NotImplementedException("Cannot INSERT into %s in a transaction that changes Iceberg tables: the Hive "
+		                              "insert is published when the statement finishes, and Glue can't commit both "
+		                              "together",
+		                              hive_table->DescribeForError());
+	}
+	transaction.wrote_other_format_tables = true;
+	return IcebergGlueHiveInsert::PlanInsert(context, planner, op, *hive_table, plan);
 }
 
 string IcebergGlueCatalog::DescribeOtherFormatTable(const TableCatalogEntry &table) const {
