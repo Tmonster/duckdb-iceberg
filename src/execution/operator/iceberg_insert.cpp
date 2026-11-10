@@ -1103,6 +1103,7 @@ PhysicalOperator &IcebergInsert::PlanInsert(ClientContext &context, PhysicalPlan
 
 PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
                                              optional_ptr<PhysicalOperator> plan) {
+	VerifyIcebergTable(op.table, "INSERT into");
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for insertion into Iceberg table");
 	}

@@ -43,3 +43,16 @@ test_glue_catalog:
 		"test/sql/local/catalog_test_config_setup/catalog_specifc/glue/*"; \
 	"$(GLUE_CATALOG_TEST_BINARY)" --test-config "$(PROJ_DIR)test/configs/glue.json" \
 		"$(GLUE_CATALOG_TEST_FILTER)" "exclude:*.test_slow"
+
+# DuckDB reading (and writing) Hive tables that boto3 registers in moto; installs pytest into GLUE_MOTO_VENV
+.PHONY: test_glue_catalog_python $(addprefix test_glue_catalog_python_,$(GLUE_CATALOG_CONFIGURATIONS))
+$(addprefix test_glue_catalog_python_,$(GLUE_CATALOG_CONFIGURATIONS)):
+	$(MAKE) test_glue_catalog_python \
+		GLUE_CATALOG_TEST_BINARY="$(PROJ_DIR)build/$(patsubst test_glue_catalog_python_%,%,$@)/test/unittest"
+
+test_glue_catalog_python: $(GLUE_MOTO_VENV)/bin/moto_server
+	@set -e; \
+	trap '$(MAKE) glue-moto-stop' EXIT; \
+	$(MAKE) glue-moto; \
+	"$(GLUE_MOTO_VENV)/bin/pip" install -q pytest packaging; \
+	"$(GLUE_MOTO_VENV)/bin/python" -m pytest -vv test/python/glue_catalog --unittest-binary "$(GLUE_CATALOG_TEST_BINARY)"

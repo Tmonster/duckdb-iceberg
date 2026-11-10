@@ -1,5 +1,6 @@
 #pragma once
 
+#include "catalog/glue/hive/glue_info.hpp"
 #include "catalog/glue/iceberg_glue_client.hpp"
 #include "catalog/metastore/iceberg_metastore_catalog.hpp"
 
@@ -35,6 +36,12 @@ public:
 	bool SupportsViews(IcebergViewOperation operation) const override;
 	IcebergListViewsResult ListViews(ClientContext &context, const vector<string> &namespace_items) override;
 	void VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const override;
+	//! Hive tables (Glue tables without the Iceberg table_type, see IcebergGlueHiveTable)
+	optional_ptr<CatalogEntry> LookupOtherFormatTable(ClientContext &context, IcebergSchemaEntry &schema,
+	                                                  const string &table_name) override;
+	void ScanOtherFormatTables(ClientContext &context, IcebergSchemaEntry &schema,
+	                           const std::function<void(CatalogEntry &)> &callback) override;
+	string DescribeOtherFormatTable(const TableCatalogEntry &table) const override;
 
 	string MetastoreName() const override {
 		return "Glue catalog";
@@ -61,6 +68,11 @@ public:
 	void ListPages(ClientContext &context, const string &operation, const string &list_key,
 	               const std::function<void(JSONWriter &, JSONMutableValue &)> &build_request,
 	               const std::function<void(JSONValue)> &callback);
+	//! A Glue Table object of the API as the aws_glue extension describes it
+	static GlueTableInfo ParseTableInfo(JSONValue table);
+	//! The partitions of a Hive table (GetPartitions, all pages)
+	vector<GluePartitionInfo> GetPartitions(ClientContext &context, const string &database_name,
+	                                        const string &table_name);
 	//! Whether a Glue table is an Iceberg table
 	static bool IsIcebergTable(JSONValue table);
 	//! The value of a Glue table's or database's parameter, empty if it isn't set
