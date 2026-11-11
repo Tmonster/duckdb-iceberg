@@ -107,7 +107,8 @@
 			"reason": "The test asserts the HTTP requests of a REST catalog",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_etag.test"
 			]
 		},
 		{
