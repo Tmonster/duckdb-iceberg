@@ -45,7 +45,7 @@ public:
 	optional<rest_api_objects::IcebergErrorResponse> error_;
 };
 
-using IcebergLoadTableResult = APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>;
+using IcebergLoadTableResult = APIResult<shared_ptr<const rest_api_objects::LoadTableResult>>;
 using IcebergLoadViewResult = APIResult<unique_ptr<const rest_api_objects::LoadViewResult>>;
 
 //! Owns the request inputs; execution only fetches and parses view metadata.

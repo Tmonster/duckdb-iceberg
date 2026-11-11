@@ -56,8 +56,12 @@ public:
 	static bool VerifyTableExistence(ClientContext &context, IcebergRestCatalog &catalog, const IcebergSchemaEntry &schema,
 	                                 const string &table);
 	static vector<string> ParseSchemaName(const string &namespace_name);
+	//! Revalidates 'cached_result' with 'etag' (If-None-Match) when both are set; an HTTP 304 returns
+	//! 'cached_result'. 'response_etag' receives the ETag the server sent (empty if none).
 	static IcebergLoadTableResult LoadTable(ClientContext &context, IcebergRestCatalog &catalog,
-	                                        const vector<string> &namespace_items, const string &table_name);
+	                                        const vector<string> &namespace_items, const string &table_name,
+	                                        const shared_ptr<const rest_api_objects::LoadTableResult> &cached_result,
+	                                        const string &etag, string &response_etag);
 	//! Returns 'nullopt' if the catalog refused the listing and 'allow_forbidden' is set.
 	static IcebergListTablesResult ListTables(ClientContext &context, IcebergRestCatalog &catalog,
 	                                          const vector<string> &namespace_items, bool allow_forbidden);
