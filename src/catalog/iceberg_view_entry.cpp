@@ -130,6 +130,7 @@ string CreateIcebergViewRequestJSON(const IcebergSchemaEntry &schema_entry, cons
 	root_object.Add("properties", writer.CreateObject());
 
 	return writer.ToString();
+}
 
 namespace {
 
