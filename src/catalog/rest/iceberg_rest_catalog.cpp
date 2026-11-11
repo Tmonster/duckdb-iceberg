@@ -50,7 +50,28 @@ IcebergListTablesResult IcebergRestCatalog::ListTables(ClientContext &context, c
 
 IcebergLoadTableResult IcebergRestCatalog::LoadTable(ClientContext &context, const vector<string> &namespace_items,
                                                      const string &table_name) {
-	return IRCAPI::LoadTable(context, *this, namespace_items, table_name);
+	auto table_key = IcebergTable::GetTableKey(*this, namespace_items, table_name);
+	// Pin the response being validated, even if the cache changes while the request runs.
+	auto cached_result = table_request_cache.Peek(table_key);
+	string etag;
+	if (cached_result) {
+		lock_guard<mutex> guard(load_table_validators_lock);
+		auto it = load_table_validators.find(table_key);
+		if (it != load_table_validators.end() && it->second.result.lock() == cached_result) {
+			etag = it->second.etag;
+		}
+	}
+	string response_etag;
+	auto result = IRCAPI::LoadTable(context, *this, namespace_items, table_name, cached_result, etag, response_etag);
+	if (result.result_) {
+		lock_guard<mutex> guard(load_table_validators_lock);
+		if (response_etag.empty()) {
+			load_table_validators.erase(table_key);
+		} else {
+			load_table_validators[table_key] = LoadTableValidator {result.result_, std::move(response_etag)};
+		}
+	}
+	return result;
 }
 
 bool IcebergRestCatalog::SupportsViews(IcebergViewOperation operation) const {
@@ -79,7 +100,7 @@ IcebergTable &IcebergRestCatalog::CreateTable(ClientContext &context, IcebergSch
                                               const IcebergCreateTableRequest &request) {
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
-	auto new_table_result = make_uniq<const rest_api_objects::LoadTableResult>(
+	auto new_table_result = make_shared_ptr<const rest_api_objects::LoadTableResult>(
 	    IRCAPI::CommitNewTable(context, *this, schema.namespace_items, request));
 	auto &table_info =
 	    AddCreatedTable(context, IcebergTable(*this, schema, request.GetName(), *new_table_result));
