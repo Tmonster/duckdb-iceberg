@@ -350,12 +350,12 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 		if (target_type.id() != LogicalTypeId::DECIMAL) {
 			break;
 		}
-		uint8_t width;
-		uint8_t scale;
+		uint32_t width;
+		uint32_t scale;
 		original_type.GetDecimalProperties(width, scale);
 
-		uint8_t other_width;
-		uint8_t other_scale;
+		uint32_t other_width;
+		uint32_t other_scale;
 		target_type.GetDecimalProperties(other_width, other_scale);
 
 		if (scale != other_scale) {

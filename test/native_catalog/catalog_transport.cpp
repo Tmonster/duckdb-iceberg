@@ -76,7 +76,7 @@ public:
 	}
 	unique_ptr<HTTPParams> InitializeParameters(ClientContext &context, const string &url) override {
 		CheckOrigin(url);
-		ClientContextFileOpener opener(context);
+		ClientContextFileOpener opener(context.GetContext());
 		return HTTPUtil::InitializeParameters(&opener, nullptr);
 	}
 	unique_ptr<HTTPParams> InitializeParameters(DatabaseInstance &db, const string &url) override {
