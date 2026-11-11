@@ -108,7 +108,8 @@
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_table.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table_as_requests.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table_as_requests.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_etag.test"
 			]
 		},
 		{
