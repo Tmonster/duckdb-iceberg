@@ -29,7 +29,7 @@ bool IcebergFilesystemMetastoreCommit::NamespaceExists(const vector<string> &nam
 	if (!fs.DirectoryExists(directory)) {
 		return false;
 	}
-	if (IcebergFilesystemCatalog::IsTableDirectory(fs, directory)) {
+	if (IcebergFilesystemCatalog::HasMetadataDirectory(fs, directory)) {
 		throw CatalogException("Cannot create schema \"%s\": the directory '%s' is a table",
 		                       StringUtil::Join(namespace_items, "."), directory);
 	}

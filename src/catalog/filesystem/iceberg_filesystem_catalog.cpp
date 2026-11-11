@@ -3,6 +3,15 @@
 #include "duckdb/common/enums/http_status_code.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/common/exception.hpp"
+#ifdef _WIN32
+#include "duckdb/common/windows.hpp"
+#include "duckdb/common/windows_util.hpp"
+#else
+#include <cerrno>
+#include <cstring>
+#include <unistd.h>
+#endif
 
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/catalog_entry/table/iceberg_table.hpp"
@@ -45,8 +54,26 @@ string IcebergFilesystemCatalog::MetadataFile(FileSystem &fs, const string &tabl
 	return fs.JoinPath(fs.JoinPath(table_directory, "metadata"), StringUtil::Format("v%d.metadata.json", version));
 }
 
-bool IcebergFilesystemCatalog::IsTableDirectory(FileSystem &fs, const string &directory) {
+bool IcebergFilesystemCatalog::HasMetadataDirectory(FileSystem &fs, const string &directory) {
 	return fs.DirectoryExists(fs.JoinPath(directory, "metadata"));
+}
+
+bool IcebergFilesystemCatalog::IsTableDirectory(FileSystem &fs, const string &directory) {
+	return HasMetadataDirectory(fs, directory) && CurrentVersion(fs, directory).IsValid();
+}
+
+optional_idx IcebergFilesystemCatalog::ParseVersionFile(const string &path) {
+	static constexpr const char *SUFFIX = ".metadata.json";
+	auto file_name = path.substr(path.find_last_of('/') + 1);
+	if (!StringUtil::StartsWith(file_name, "v") || !StringUtil::EndsWith(file_name, SUFFIX)) {
+		return optional_idx();
+	}
+	auto digits = file_name.substr(1, file_name.size() - 1 - strlen(SUFFIX));
+	if (digits.empty() || digits.size() > 18 ||
+	    !std::all_of(digits.begin(), digits.end(), [](char c) { return StringUtil::CharacterIsDigit(c); })) {
+		return optional_idx();
+	}
+	return optional_idx(std::stoull(digits));
 }
 
 vector<string> IcebergFilesystemCatalog::ListDirectories(FileSystem &fs, const string &directory) {
@@ -86,10 +113,9 @@ optional_idx IcebergFilesystemCatalog::CurrentVersion(FileSystem &fs, const stri
 			if (is_directory) {
 				return;
 			}
-			auto file_version = IcebergClientCommit::ParseMetadataVersion(name);
-			auto file_name = name.substr(name.find_last_of('/') + 1);
-			if (StringUtil::StartsWith(file_name, "v") && StringUtil::EndsWith(file_name, ".metadata.json") &&
-			    (!version.IsValid() || file_version > version.GetIndex())) {
+			// Temporary files of a commit in progress (or of one that stopped) aren't versions
+			auto file_version = ParseVersionFile(name);
+			if (file_version.IsValid() && (!version.IsValid() || file_version.GetIndex() > version.GetIndex())) {
 				version = file_version;
 			}
 		});
@@ -114,7 +140,7 @@ optional_idx IcebergFilesystemCatalog::CurrentVersion(FileSystem &fs, const stri
 bool IcebergFilesystemCatalog::SchemaExists(ClientContext &context, const string &schema_name) {
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto directory = NamespaceDirectory(StringUtil::Split(schema_name, '.'));
-	return fs.DirectoryExists(directory) && !IsTableDirectory(fs, directory);
+	return fs.DirectoryExists(directory) && !HasMetadataDirectory(fs, directory);
 }
 
 IcebergListSchemasResult IcebergFilesystemCatalog::ListSchemas(ClientContext &context, const vector<string> &parent) {
@@ -124,7 +150,7 @@ IcebergListSchemasResult IcebergFilesystemCatalog::ListSchemas(ClientContext &co
 	for (auto &name : ListDirectories(fs, directory)) {
 		auto items = parent;
 		items.push_back(name);
-		if (IsTableDirectory(fs, NamespaceDirectory(items))) {
+		if (HasMetadataDirectory(fs, NamespaceDirectory(items))) {
 			continue;
 		}
 		if (attach_options.support_nested_namespaces) {
@@ -233,29 +259,60 @@ unique_ptr<IcebergMetastoreCommit> IcebergFilesystemCatalog::BeginCommit(ClientC
 
 namespace {
 
-//! Create 'path' with 'content', returns false if it exists already
+//! Atomically creates 'path' as a hard link to the complete file 'temp_path', returns false if 'path' exists
+//! already. DuckDB's FileSystem::MoveFile is rename(), which replaces an existing target, so it can't arbitrate
+//! between commits: link() (MoveFileW on Windows) fails instead. Both are atomic on a local file system.
+bool PublishFile(const string &temp_path, const string &path) {
+#ifdef _WIN32
+	auto unicode_temp = WindowsUtil::UTF8ToUnicode(temp_path.c_str());
+	auto unicode_path = WindowsUtil::UTF8ToUnicode(path.c_str());
+	if (MoveFileW(unicode_temp.c_str(), unicode_path.c_str())) {
+		return true;
+	}
+	auto error = GetLastError();
+	if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS) {
+		return false;
+	}
+	throw IOException("Could not publish metadata file \"%s\" as \"%s\" (error %d)", temp_path, path, error);
+#else
+	if (link(temp_path.c_str(), path.c_str()) == 0) {
+		return true;
+	}
+	if (errno == EEXIST) {
+		return false;
+	}
+	throw IOException("Could not publish metadata file \"%s\" as \"%s\": %s", temp_path, path, strerror(errno));
+#endif
+}
+
+//! Writes 'content' to a temporary file next to 'path', then publishes it as 'path' if that doesn't exist yet.
+//! Readers and crashes never leave a partial 'path': it appears complete, or not at all. Returns false if 'path'
+//! exists already.
 bool WriteNewFile(FileSystem &fs, const string &path, const string &content) {
-	auto flags = FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE |
-	             FileFlags::FILE_FLAGS_EXCLUSIVE_CREATE | FileFlags::FILE_FLAGS_NULL_IF_EXISTS;
 	if (fs.FileExists(path)) {
 		return false;
 	}
-	unique_ptr<FileHandle> file;
+	auto slash = path.find_last_of('/');
+	auto directory = path.substr(0, slash);
+	// Not a 'v<N>.metadata.json' name, so CurrentVersion never takes it for a version
+	auto temp_path = directory + "/." + path.substr(slash + 1) + "." + UUID::ToString(UUID::GenerateRandomUUID()) + ".tmp";
+	{
+		auto file = fs.OpenFile(temp_path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW);
+		file->Write((void *)content.c_str(), content.size());
+		// The content must be durable before it is published, or a crash could leave a committed partial version
+		file->Sync();
+		file->Close();
+	}
+	bool published;
 	try {
-		file = fs.OpenFile(path, flags);
-	} catch (std::exception &) {
-		// Not every file system returns NULL for an existing file
-		if (fs.FileExists(path)) {
-			return false;
-		}
+		published = PublishFile(fs.ExpandPath(temp_path), fs.ExpandPath(path));
+	} catch (...) {
+		fs.TryRemoveFile(temp_path);
 		throw;
 	}
-	if (!file) {
-		return false;
-	}
-	file->Write((void *)content.c_str(), content.size());
-	file->Close();
-	return true;
+	// On success the final name is a second link to the file, on failure the temporary file is all that's left
+	fs.TryRemoveFile(temp_path);
+	return published;
 }
 
 } // namespace
@@ -268,9 +325,7 @@ string IcebergFilesystemCatalog::WriteTableMetadata(ClientContext &context, Iceb
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto table_directory = TableDirectory(identifier.namespace_items, identifier.name);
 	auto metadata_directory = fs.JoinPath(table_directory, "metadata");
-	if (!fs.IsRemoteFile(metadata_directory)) {
-		fs.CreateDirectoriesRecursive(metadata_directory);
-	}
+	fs.CreateDirectoriesRecursive(metadata_directory);
 	idx_t next_version = 1;
 	if (base) {
 		next_version = IcebergClientCommit::ParseMetadataVersion(base_location) + 1;

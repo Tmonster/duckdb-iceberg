@@ -483,8 +483,18 @@ static unique_ptr<Catalog> FilesystemCatalogAttach(ClientContext &context, Attac
 		throw InvalidConfigurationException(
 		    "An Iceberg filesystem catalog needs a warehouse: ATTACH '<directory>' AS ... (CATALOG_TYPE 'filesystem')");
 	}
+	// A commit publishes a metadata file with an atomic create-if-absent of a complete file: object stores and other
+	// remote file systems don't offer it, so only the local file system is supported
+	auto scheme_end = warehouse.find("://");
+	if (FileSystem::IsRemoteFile(warehouse) ||
+	    (scheme_end != string::npos && !StringUtil::StartsWith(StringUtil::Lower(warehouse), "file:"))) {
+		throw InvalidConfigurationException(
+		    "An Iceberg filesystem catalog needs a warehouse on the local file system, '%s' is not: a commit publishes "
+		    "its metadata file atomically, which object stores and remote file systems don't support",
+		    warehouse);
+	}
 	auto &fs = FileSystem::GetFileSystem(context);
-	if (!fs.IsRemoteFile(warehouse) && options.access_mode != AccessMode::READ_ONLY) {
+	if (options.access_mode != AccessMode::READ_ONLY) {
 		fs.CreateDirectoriesRecursive(warehouse);
 	}
 	DUCKDB_LOG_INFO(context, "Iceberg filesystem catalog '%s' attached: it supports a single writer only, concurrent "
