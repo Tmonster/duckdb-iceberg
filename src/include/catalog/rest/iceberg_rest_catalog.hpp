@@ -37,6 +37,7 @@ public:
 	LoadSchemaProperties(ClientContext &context, const IcebergSchemaEntry &schema) override;
 	IcebergListTablesResult ListTables(ClientContext &context, const vector<string> &namespace_items,
 	                                   bool allow_forbidden) override;
+	//! Revalidates the cached result with its ETag (If-None-Match) when the server sent one for it.
 	IcebergLoadTableResult LoadTable(ClientContext &context, const vector<string> &namespace_items,
 	                                 const string &table_name) override;
 	bool SupportsViews(IcebergViewOperation operation) const override;
@@ -66,6 +67,17 @@ public:
 	unordered_set<string> supported_urls;
 	//! The well-known catalog the REST catalog was attached as, if any
 	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
+
+private:
+	//! The ETag the server sent for a LoadTable response. It is only used while that exact response is still the
+	//! one in 'table_request_cache': any overwrite or eviction of the cache entry replaces or removes it, so a 304
+	//! can never revive a stale or replaced result.
+	struct LoadTableValidator {
+		weak_ptr<const rest_api_objects::LoadTableResult> result;
+		string etag;
+	};
+	mutex load_table_validators_lock;
+	unordered_map<string, LoadTableValidator> load_table_validators;
 };
 
 } // namespace duckdb

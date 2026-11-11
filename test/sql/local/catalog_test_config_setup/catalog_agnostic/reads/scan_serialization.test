@@ -54,7 +54,8 @@ statement ok
 PRAGMA explain_output = 'optimized_only';
 
 # Controls for the negative plan assertions below: a materialized CTE keeps its CTE_SCAN, and a window without
-# PARTITION BY is not rewritten into a self-join, so both operator names are visible in this rendering.
+# PARTITION BY is not rewritten into a self-join, so both operator names are visible in this rendering. The window
+# is ordered because DuckDB rewrites an empty OVER () into an ungrouped aggregate.
 query II
 EXPLAIN WITH copied AS MATERIALIZED (
     SELECT order_no FROM my_datalake.default.scan_serialization_sales
@@ -64,7 +65,7 @@ SELECT count(*) FROM copied a, copied b;
 logical_opt	<REGEX>:.*CTE_SCAN.*
 
 query II
-EXPLAIN SELECT order_no, count(*) OVER () FROM my_datalake.default.scan_serialization_sales;
+EXPLAIN SELECT order_no, sum(order_no) OVER (ORDER BY order_no) FROM my_datalake.default.scan_serialization_sales;
 ----
 logical_opt	<REGEX>:.*WINDOW.*
 
@@ -99,6 +100,11 @@ SET iceberg_enable_scan_serialization = true;
 
 # This is the relevant shape of TPC-DS Q95: a two-scan CTE is referenced twice under a LIMIT. DuckDB
 # automatically inlines it by deep-copying its Iceberg scans; before serialization support it retained a CTE_SCAN.
+# The common subplan optimizer would share the copied subplan again through a CTE of its own, so it is disabled for
+# this plan assertion.
+statement ok
+SET disabled_optimizers = 'common_subplan';
+
 query II
 EXPLAIN WITH pairs AS (
     SELECT a.order_no
@@ -118,6 +124,9 @@ WHERE s.order_no IN (SELECT order_no FROM pairs)
 LIMIT 100;
 ----
 logical_opt	<!REGEX>:.*CTE_SCAN.*
+
+statement ok
+RESET disabled_optimizers;
 
 query I
 WITH pairs AS NOT MATERIALIZED (
