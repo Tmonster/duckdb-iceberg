@@ -97,7 +97,7 @@ bool IcebergTableSet::ApplyLoadResult(ClientContext &context, IcebergTable &tabl
 	}
 	auto &load_table_result = *get_table_result.result_;
 	table.InitializeFromCatalogResponse(context, load_table_result);
-	// Rejected payloads are destroyed; they must not remain as cache identities on the local table.
+	// A rejected result must not become the local table's cache identity.
 	table.initialization_source = nullptr;
 	if (publication.TryPublish(std::move(get_table_result.result_))) {
 		table.initialization_source = load_table_result;
