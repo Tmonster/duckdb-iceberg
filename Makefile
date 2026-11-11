@@ -27,6 +27,11 @@ ifneq ($(ICEBERG_SQL_CATALOG_POSTGRES),)
 	EXT_FLAGS:=${EXT_FLAGS} -DVCPKG_MANIFEST_FEATURES=postgres
 endif
 
+# CI runs slow tests in the dedicated catalog workflows.
+ifeq ($(GITHUB_ACTIONS),true)
+T ?= "test/*" "exclude:*.test_slow"
+endif
+
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
