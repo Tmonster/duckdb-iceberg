@@ -350,12 +350,12 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 		if (target_type.id() != LogicalTypeId::DECIMAL) {
 			break;
 		}
-		uint8_t width;
-		uint8_t scale;
+		uint32_t width;
+		uint32_t scale;
 		original_type.GetDecimalProperties(width, scale);
 
-		uint8_t other_width;
-		uint8_t other_scale;
+		uint32_t other_width;
+		uint32_t other_scale;
 		target_type.GetDecimalProperties(other_width, other_scale);
 
 		if (scale != other_scale) {
@@ -761,10 +761,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::ADD_COLUMN: {
 		auto &add_column_info = alter_table_info.Cast<AddColumnInfo>();
 		auto &column_definition = add_column_info.new_column;
-		if (column_definition.GetType().IsNested()) {
-			throw NotImplementedException("ADD COLUMN for Nested Types not supported for Iceberg tables");
-		}
-
 		if (add_column_info.if_column_not_exists) {
 			for (auto &col : current_schema.columns) {
 				if (col->name == column_definition.GetName()) {

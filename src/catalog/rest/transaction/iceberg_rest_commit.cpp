@@ -99,7 +99,7 @@ void IcebergRestTransactionCommit::Commit() {
 
 	// Copy user settings from the original context so that e.g. s3_access_key_id are available
 	if (!transaction.context.expired()) {
-		temp_con_context->config = transaction.context.lock()->config;
+		ClientConfig::GetConfig(*temp_con_context) = ClientConfig::GetConfig(*transaction.context.lock());
 	}
 
 	try {

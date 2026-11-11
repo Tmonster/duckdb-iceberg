@@ -26,7 +26,7 @@ LoadTableCachePublication::~LoadTableCachePublication() {
 	}
 }
 
-bool LoadTableCachePublication::TryPublish(unique_ptr<const rest_api_objects::LoadTableResult> result) {
+bool LoadTableCachePublication::TryPublish(shared_ptr<const rest_api_objects::LoadTableResult> result) {
 	return cache->TryPublish(*this, std::move(result));
 }
 
@@ -60,7 +60,7 @@ void LoadTableResultCache::InvalidateLoads(const string &table_key) {
 }
 
 bool LoadTableResultCache::TryPublish(LoadTableCachePublication &publication,
-                                      unique_ptr<const rest_api_objects::LoadTableResult> result) {
+                                      shared_ptr<const rest_api_objects::LoadTableResult> result) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	auto it = pending_loads.find(publication.table_key);
 	if (it == pending_loads.end() || it->second.latest.get() != &publication) {
@@ -72,14 +72,24 @@ bool LoadTableResultCache::TryPublish(LoadTableCachePublication &publication,
 }
 
 void LoadTableResultCache::SetOrOverwrite(const string &table_key,
-                                          unique_ptr<const rest_api_objects::LoadTableResult> result) {
+                                          shared_ptr<const rest_api_objects::LoadTableResult> result) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	InvalidateLoads(table_key);
 	Store(table_key, std::move(result));
 }
 
-void LoadTableResultCache::Store(const string &table_key, unique_ptr<const rest_api_objects::LoadTableResult> result) {
-	// With staleness disabled, retain the payload for identity-based invalidation but expire it immediately.
+shared_ptr<const rest_api_objects::LoadTableResult> LoadTableResultCache::Peek(const string &table_key) {
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	auto it = tables.find(table_key);
+	if (it == tables.end()) {
+		return nullptr;
+	}
+	return it->second.load_table_result;
+}
+
+void LoadTableResultCache::Store(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> result) {
+	// With staleness disabled, retain the payload (for identity-based invalidation, and so a catalog can revalidate
+	// it), but require a catalog request before reusing it.
 	system_clock::time_point expires_at;
 	if (attach_options.max_table_staleness_micros.IsValid()) {
 		expires_at =
