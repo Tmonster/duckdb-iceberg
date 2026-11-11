@@ -145,7 +145,7 @@ static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison
 		return MatchBoundsConstantTemplated<DayTransform>(constant, comparison_type, stats, transform);
 	case IcebergTransformType::HOUR:
 		return MatchBoundsConstantTemplated<HourTransform>(constant, comparison_type, stats, transform);
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return true;
 	default:
 		throw InvalidConfigurationException("Transform '%s' not implemented", transform.RawType());
@@ -437,7 +437,11 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			if (stats.HasMissingOrNullBounds()) {
 				return true;
 			}
-			column_stats = stats.BuildColumnStats(stats.lower_bound->type());
+			auto column_type = FindFilteredColumnType(expr);
+			if (!column_type) {
+				return true;
+			}
+			column_stats = stats.BuildColumnStats(*column_type);
 		}
 		if (!column_stats) {
 			return true;
