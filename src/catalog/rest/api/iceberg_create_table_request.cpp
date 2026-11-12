@@ -40,7 +40,7 @@ IcebergTableMetadata IcebergCreateTableRequest::CreateInitialMetadata(const stri
 	}
 	auto initial_schema = schema->Copy();
 	initial_schema->schema_id = 0;
-	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
+	unordered_map<int32_t, shared_ptr<const IcebergTableSchema>> schemas;
 	schemas.emplace(0, initial_schema);
 	IcebergTableMetadata result {IcebergTableMetadataSchemas(std::move(schemas))};
 	result.table_uuid = table_uuid;

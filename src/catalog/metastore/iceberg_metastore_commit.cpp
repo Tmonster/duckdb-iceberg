@@ -320,7 +320,7 @@ void IcebergMetastoreTransactionCommit::CommitTables(IcebergMetastoreCommit &com
 			continue;
 		}
 		// A catalog server creates a table's metadata directory, here the manifests are the first files written to it
-		auto table_metadata_directory = table_info.table_metadata.GetMetadataPath(fs);
+		auto table_metadata_directory = table_info.GetMetadata().GetMetadataPath(fs);
 		if (!fs.IsRemoteFile(table_metadata_directory)) {
 			fs.CreateDirectoriesRecursive(table_metadata_directory);
 		}
@@ -377,7 +377,7 @@ void IcebergMetastoreTransactionCommit::DropTable(IcebergMetastoreCommit &commit
 	auto &table = delete_update.deleted_table.get();
 	auto purge_location = catalog.PurgeLocation(table);
 	commit.DropEntry(IcebergMetastoreCatalog::MetastoreIdentifier(table.schema, table.name),
-	                 IcebergMetastoreEntryType::TABLE, table.table_metadata);
+	                 IcebergMetastoreEntryType::TABLE, table.GetMetadata());
 	OnEntryChanged(commit);
 	on_commit.push_back([this, &table, &context, purge_location]() {
 		catalog.table_request_cache.EvictIfCurrent(table);

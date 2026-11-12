@@ -12,7 +12,7 @@
 
 #include "catalog/iceberg_catalog_requests.hpp"
 #include "catalog/iceberg_schema_set.hpp"
-#include "rest_catalog/objects/load_table_result.hpp"
+#include "catalog/iceberg_table_metadata_cache.hpp"
 #include "common/iceberg_utils.hpp"
 
 namespace duckdb {
@@ -25,8 +25,7 @@ struct IcebergCreateTableRequest;
 
 class MetadataCacheValue {
 public:
-	MetadataCacheValue(timestamp_ms_t expire_timestamp_ms,
-	                   shared_ptr<const rest_api_objects::LoadTableResult> load_table_result)
+	MetadataCacheValue(timestamp_ms_t expire_timestamp_ms, shared_ptr<const IcebergLoadTableResponse> load_table_result)
 	    : expire_timestamp_ms(expire_timestamp_ms), load_table_result(std::move(load_table_result)) {
 	}
 
@@ -34,7 +33,7 @@ public:
 	//! The timestamp until when this entry is valid
 	timestamp_ms_t expire_timestamp_ms;
 	//! The payload of the cache entry
-	shared_ptr<const rest_api_objects::LoadTableResult> load_table_result;
+	shared_ptr<const IcebergLoadTableResponse> load_table_result;
 };
 
 class LoadTableResultCache;
@@ -44,7 +43,7 @@ class LoadTableResultCache;
 class LoadTableCachePublication {
 public:
 	~LoadTableCachePublication();
-	bool TryPublish(shared_ptr<const rest_api_objects::LoadTableResult> result);
+	bool TryPublish(shared_ptr<const IcebergLoadTableResponse> result);
 
 private:
 	friend class LoadTableResultCache;
@@ -64,32 +63,33 @@ public:
 
 public:
 	bool Get(ClientContext &context, const string &table_key,
-	         const std::function<void(const rest_api_objects::LoadTableResult &)> &callback,
+	         const std::function<void(shared_ptr<const IcebergLoadTableResponse>)> &callback,
 	         bool validate_cache = true) {
-		annotated_lock_guard<annotated_mutex> guard(lock);
-		auto it = tables.find(table_key);
-		if (it == tables.end()) {
-			return false;
+		shared_ptr<const IcebergLoadTableResponse> response;
+		{
+			annotated_lock_guard<annotated_mutex> guard(lock);
+			auto it = tables.find(table_key);
+			if (it == tables.end()) {
+				return false;
+			}
+			auto transaction_start_ms = IcebergUtils::GetTransactionStartTimeMS(context);
+			if (validate_cache && transaction_start_ms > it->second.expire_timestamp_ms) {
+				return false;
+			}
+			response = it->second.load_table_result;
 		}
-
-		auto transaction_start_ms = IcebergUtils::GetTransactionStartTimeMS(context);
-
-		auto &entry = it->second;
-		if (validate_cache && transaction_start_ms > entry.expire_timestamp_ms) {
-			// cached value has expired
-			return false;
-		}
-		callback(*entry.load_table_result);
+		// Metadata parsing (including authoritative file I/O) never holds the catalog-wide lock.
+		callback(std::move(response));
 		return true;
 	}
 	//! Create publication state before fetching. A later fetch supersedes earlier loads for the same key.
 	unique_ptr<LoadTableCachePublication> BeginLoad(const string &table_key);
 	//! Authoritative publication (e.g. staged creation) also invalidates outstanding fetches.
-	void SetOrOverwrite(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> load_table_result);
+	void SetOrOverwrite(const string &table_key, shared_ptr<const IcebergLoadTableResponse> load_table_result);
 
 	//! The result currently cached for the key, even if it has expired (nullptr if none). Any overwrite or
 	//! eviction replaces or removes it, so callers can detect that by comparing identities.
-	shared_ptr<const rest_api_objects::LoadTableResult> Peek(const string &table_key);
+	shared_ptr<const IcebergLoadTableResponse> Peek(const string &table_key);
 
 	//! Evict only if the table was initialized from the result that is still cached for its key.
 	void EvictIfCurrent(const IcebergTable &table);
@@ -100,10 +100,10 @@ private:
 		optional_ptr<LoadTableCachePublication> latest;
 		idx_t count = 0;
 	};
-	bool TryPublish(LoadTableCachePublication &publication, shared_ptr<const rest_api_objects::LoadTableResult> result);
+	bool TryPublish(LoadTableCachePublication &publication, shared_ptr<const IcebergLoadTableResponse> result);
 	void Release(LoadTableCachePublication &publication);
 	void InvalidateLoads(const string &table_key) DUCKDB_REQUIRES(lock);
-	void Store(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> result)
+	void Store(const string &table_key, shared_ptr<const IcebergLoadTableResponse> result)
 	    DUCKDB_REQUIRES(lock);
 
 	IcebergAttachOptions &attach_options;

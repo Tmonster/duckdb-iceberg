@@ -65,14 +65,15 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const Iceber
 	return response;
 }
 
-struct IcebergLoadTableResponse {
+struct IcebergLoadTableResponseJSON {
 	string body;
 	//! The REST request the response was returned for, unset for other catalog types
 	optional<string> url;
 };
 
-static IcebergLoadTableResponse LoadResponse(ClientContext &context, const IcebergLoadTableResponseBindData &bind_data) {
-	IcebergLoadTableResponse result;
+static IcebergLoadTableResponseJSON LoadResponse(ClientContext &context,
+                                                 const IcebergLoadTableResponseBindData &bind_data) {
+	IcebergLoadTableResponseJSON result;
 	if (bind_data.ic_catalog.GetIcebergCatalogType() == IcebergCatalogType::REST) {
 		// The response exactly as the server returned it
 		auto response = MakeRequest(context, bind_data);
@@ -88,7 +89,7 @@ static IcebergLoadTableResponse LoadResponse(ClientContext &context, const Icebe
 		                  load_result.error_->_error.message);
 	}
 	JSONWriter writer;
-	writer.SetRoot(load_result.result_->ToJSON(writer));
+	writer.SetRoot(load_result.result_->result.ToJSON(writer));
 	result.body = writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN);
 	return result;
 }
