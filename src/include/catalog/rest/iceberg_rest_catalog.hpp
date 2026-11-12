@@ -73,7 +73,7 @@ private:
 	//! one in 'table_request_cache': any overwrite or eviction of the cache entry replaces or removes it, so a 304
 	//! can never revive a stale or replaced result.
 	struct LoadTableValidator {
-		weak_ptr<const rest_api_objects::LoadTableResult> result;
+		weak_ptr<const IcebergLoadTableResponse> result;
 		string etag;
 	};
 	mutex load_table_validators_lock;

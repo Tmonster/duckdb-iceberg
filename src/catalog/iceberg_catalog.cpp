@@ -26,7 +26,7 @@ LoadTableCachePublication::~LoadTableCachePublication() {
 	}
 }
 
-bool LoadTableCachePublication::TryPublish(shared_ptr<const rest_api_objects::LoadTableResult> result) {
+bool LoadTableCachePublication::TryPublish(shared_ptr<const IcebergLoadTableResponse> result) {
 	return cache->TryPublish(*this, std::move(result));
 }
 
@@ -60,7 +60,7 @@ void LoadTableResultCache::InvalidateLoads(const string &table_key) {
 }
 
 bool LoadTableResultCache::TryPublish(LoadTableCachePublication &publication,
-                                      shared_ptr<const rest_api_objects::LoadTableResult> result) {
+                                      shared_ptr<const IcebergLoadTableResponse> result) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	auto it = pending_loads.find(publication.table_key);
 	if (it == pending_loads.end() || it->second.latest.get() != &publication) {
@@ -71,14 +71,13 @@ bool LoadTableResultCache::TryPublish(LoadTableCachePublication &publication,
 	return true;
 }
 
-void LoadTableResultCache::SetOrOverwrite(const string &table_key,
-                                          shared_ptr<const rest_api_objects::LoadTableResult> result) {
+void LoadTableResultCache::SetOrOverwrite(const string &table_key, shared_ptr<const IcebergLoadTableResponse> result) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	InvalidateLoads(table_key);
 	Store(table_key, std::move(result));
 }
 
-shared_ptr<const rest_api_objects::LoadTableResult> LoadTableResultCache::Peek(const string &table_key) {
+shared_ptr<const IcebergLoadTableResponse> LoadTableResultCache::Peek(const string &table_key) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	auto it = tables.find(table_key);
 	if (it == tables.end()) {
@@ -87,7 +86,7 @@ shared_ptr<const rest_api_objects::LoadTableResult> LoadTableResultCache::Peek(c
 	return it->second.load_table_result;
 }
 
-void LoadTableResultCache::Store(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> result) {
+void LoadTableResultCache::Store(const string &table_key, shared_ptr<const IcebergLoadTableResponse> result) {
 	// With staleness disabled, retain the payload (for identity-based invalidation, and so a catalog can revalidate
 	// it), but require a catalog request before reusing it.
 	system_clock::time_point expires_at;
@@ -381,7 +380,7 @@ void IcebergCatalog::AddCreateTableUpdates(ClientContext &context, IcebergTable 
 	transaction_data.TableAddSortOrder();
 	transaction_data.TableSetDefaultSortOrder();
 	transaction_data.TableSetLocation();
-	transaction_data.TableSetProperties(table_info.table_metadata.table_properties);
+	transaction_data.TableSetProperties(table_info.GetMetadata().table_properties);
 
 	iceberg_transaction.SetLatestTableState(table_info.GetTableKey(), IcebergTableStatus::ALIVE);
 }

@@ -45,7 +45,9 @@ public:
 	optional<rest_api_objects::IcebergErrorResponse> error_;
 };
 
-using IcebergLoadTableResult = APIResult<shared_ptr<const rest_api_objects::LoadTableResult>>;
+class IcebergLoadTableResponse;
+//! The response holds the catalog payload and lazily parsed metadata shared by tables initialized from it.
+using IcebergLoadTableResult = APIResult<shared_ptr<const IcebergLoadTableResponse>>;
 using IcebergLoadViewResult = APIResult<unique_ptr<const rest_api_objects::LoadViewResult>>;
 
 //! Owns the request inputs; execution only fetches and parses view metadata.
