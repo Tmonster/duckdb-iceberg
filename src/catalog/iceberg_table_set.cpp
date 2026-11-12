@@ -64,7 +64,7 @@ bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable
 	// Only check cache if MAX_TABLE_STALENESS option is set
 	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
 		auto cache_hit = ic_catalog.table_request_cache.Get(
-		    context, table_key, [&](const rest_api_objects::LoadTableResult &cached_result) {
+		    context, table_key, [&](shared_ptr<const IcebergLoadTableResponse> cached_result) {
 			    // Use the cached result instead of making a new request
 			    table.InitializeFromCatalogResponse(context, cached_result);
 		    });
@@ -95,7 +95,7 @@ bool IcebergTableSet::ApplyLoadResult(ClientContext &context, IcebergTable &tabl
 		    StringUtil::Format("GetTableInformation endpoint returned response code %s with message \"%s\"",
 		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
 	}
-	auto &load_table_result = *get_table_result.result_;
+	auto load_table_result = get_table_result.result_;
 	table.InitializeFromCatalogResponse(context, load_table_result);
 	// A rejected result must not become the local table's cache identity.
 	table.initialization_source = nullptr;
@@ -119,6 +119,18 @@ struct PendingTableLoad {
 void WarnTableLoadFailure(ClientContext &context, IcebergTable &table, const ErrorData &error) {
 	DUCKDB_LOG_WARNING(context, "Could not resolve the columns of Iceberg table '%s' while listing: %s",
 	                   table.GetTableKey(), error.RawMessage());
+}
+
+optional_ptr<IcebergTable> GetVisibleTable(IcebergTransaction &transaction, IcebergTable &listed_table) {
+	auto state = transaction.GetLatestTableState(listed_table.GetTableKey());
+	if (!state) {
+		return listed_table;
+	}
+	if (!state->IsAlive()) {
+		return nullptr;
+	}
+	// Match ordinary table lookup: local ALTERs and transaction-pinned schemas take precedence over the listing.
+	return state->GetInfo();
 }
 
 } // namespace
@@ -176,7 +188,10 @@ void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::functi
 		if (entry != entries.end()) {
 			schedule_next();
 		}
-		callback(GetScanEntry(load->table));
+		auto visible_table = GetVisibleTable(transaction, load->table);
+		if (visible_table) {
+			callback(GetScanEntry(*visible_table));
+		}
 	}
 	// Join at the scan boundary. Exceptions instead cancel and drain through the executor's destructor.
 	executor.Drain();
@@ -228,7 +243,10 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 	for (auto &entry : entries) {
 		auto &table = *entry.second;
 		transaction.tables[table.GetTableKey()] = entry.second;
-		callback(GetScanEntry(table));
+		auto visible_table = GetVisibleTable(transaction, table);
+		if (visible_table) {
+			callback(GetScanEntry(*visible_table));
+		}
 	}
 }
 
@@ -498,7 +516,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 	iceberg_transaction.tables[table_key] = new_version;
 	auto &state = iceberg_transaction.SetCatalogTableState(new_version);
-	if (iceberg_transaction.StartedBefore(table_info.table_metadata.last_updated_ms)) {
+	if (iceberg_transaction.StartedBefore(table_info.GetMetadata().last_updated_ms)) {
 		state.GetOrCreateTransactionInfo(iceberg_transaction);
 	}
 	return state.GetInfo().GetSchemaVersion(at);
