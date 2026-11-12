@@ -9,6 +9,10 @@
 #include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/iceberg_rest_catalog.hpp"
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
+
+#include <condition_variable>
+#include <thread>
 
 // LoadTable revalidation (ETag / If-None-Match) is kept in the REST catalog: IcebergRestCatalog remembers the ETag of
 // each response and sends it only while that exact response is still the one in the load-table cache. The cache and
@@ -135,7 +139,7 @@ TEST_CASE("LoadTable revalidation follows the response currently in the cache", 
 		test.Query("CALL truncate_duckdb_logs()");
 		auto result = test.Load();
 		REQUIRE(result.status_ == HTTPStatusCode::NotModified_304);
-		REQUIRE(result.result_->config->at("test-version") == "new");
+		REQUIRE(result.result_->result.config->at("test-version") == "new");
 		REQUIRE(test.LastValidator().ToString() == "\"B\"");
 		REQUIRE_FALSE(publication->TryPublish(std::move(result.result_)));
 	}
@@ -146,20 +150,20 @@ TEST_CASE("LoadTable revalidation follows the response currently in the cache", 
 		test.Query("CALL truncate_duckdb_logs()");
 		auto result = test.Load();
 		REQUIRE(result.status_ == HTTPStatusCode::NotModified_304);
-		REQUIRE(result.result_->config->at("test-version") == "new");
+		REQUIRE(result.result_->result.config->at("test-version") == "new");
 		REQUIRE(test.LastValidator().ToString() == "\"B\"");
 	}
 	SECTION("Authoritative publication clears the validator") {
-		auto replacement = make_shared_ptr<rest_api_objects::LoadTableResult>(test.Cache().Peek(test.key)->Copy());
+		auto replacement = make_shared_ptr<rest_api_objects::LoadTableResult>(test.Cache().Peek(test.key)->result.Copy());
 		(*replacement->config)["test-version"] = "new";
-		test.Cache().SetOrOverwrite(test.key, std::move(replacement));
+		test.Cache().SetOrOverwrite(test.key, make_shared_ptr<const IcebergLoadTableResponse>(std::move(*replacement)));
 		test.Respond("\"A\"", 304);
 		test.Query("CALL truncate_duckdb_logs()");
 		REQUIRE_THROWS_WITH(test.Load(), Catch::Contains("HTTP 304 without a cached response to revalidate"));
 		REQUIRE(test.LastValidator().IsNull());
 		REQUIRE_FALSE(publication->TryPublish(test.Cache().Peek(test.key)));
 	}
-	REQUIRE(test.Cache().Peek(test.key)->config->at("test-version") == "new");
+	REQUIRE(test.Cache().Peek(test.key)->result.config->at("test-version") == "new");
 }
 
 TEST_CASE("Superseded LoadTable revalidations cannot publish after a newer load is abandoned", "[iceberg_cache]") {
@@ -212,11 +216,13 @@ TEST_CASE("LoadTable refresh revalidates metadata while credential refresh remai
 	test.Respond("\"A\"", 200, R"({"metadata":{"location":"s3://test/t"},
 	    "config":{"s3.region":"us-east-1","s3.session-token":"EXPIRED_TOKEN","s3.session-token-expires-at-ms":"1"}})");
 	table.RefreshFromCatalog(*test.connection.context);
-	auto snapshot_id = table.table_metadata.current_snapshot_id;
+	auto snapshot_id = table.GetMetadata().current_snapshot_id;
+	auto parsed = table.GetMetadataOwner();
 	test.Respond("\"B\"", 304);
 	test.Query("CALL truncate_duckdb_logs()");
 	table.RefreshFromCatalog(*test.connection.context);
-	REQUIRE(table.table_metadata.current_snapshot_id == snapshot_id);
+	REQUIRE(table.GetMetadata().current_snapshot_id == snapshot_id);
+	REQUIRE(table.GetMetadataOwner() == parsed);
 	REQUIRE(test.LastValidator().ToString() == "\"A\"");
 	// The 304's ETag replaces the validator of the cached response.
 	test.Respond("\"B\"", 304);
@@ -258,6 +264,193 @@ TEST_CASE("LoadTable refresh revalidates metadata while credential refresh remai
 	                    Catch::Contains("HTTP 304 without a cached response"));
 }
 
+TEST_CASE("Parsed LoadTable generations survive replacement and rejected publication", "[iceberg_cache]") {
+	LoadTableCacheTest test;
+	auto &table = test.Table();
+	auto response = test.Cache().Peek(test.key);
+	auto parsed = response->GetMetadata(*test.connection.context, table);
+	REQUIRE(parsed == table.GetMetadataOwner());
+	auto snapshot = parsed->GetLatestSnapshot();
+	REQUIRE(snapshot);
+
+	// A 304 retains the cached generation, and with it the parsed metadata.
+	auto first = test.Cache().BeginLoad(test.key);
+	test.Respond("\"rotated\"", 304);
+	auto unchanged = test.Load();
+	REQUIRE(unchanged.result_ == response);
+	REQUIRE(unchanged.result_->GetMetadata(*test.connection.context, table) == parsed);
+	REQUIRE(first->TryPublish(unchanged.result_));
+	first.reset();
+
+	// Revalidation is kept in the REST catalog, so a load revalidates the response that is cached when it runs (not
+	// the one cached when its publication began). A replaced or evicted generation is never revived, and a parsed
+	// generation that is still referenced stays intact.
+	auto late = test.Cache().BeginLoad(test.key);
+	SECTION("A new 200 uses the same ETag but different metadata") {
+		test.Respond("\"rotated\"", 200, R"({"metadata":{"properties":{"owner-test":"new"}}})");
+		table.RefreshFromCatalog(*test.connection.context);
+		REQUIRE(table.GetMetadataOwner() != parsed);
+		REQUIRE(table.GetMetadata().GetTableProperty("owner-test") == "new");
+		auto current = test.Cache().Peek(test.key);
+		REQUIRE(current != response);
+		test.Respond("\"late\"", 304);
+		auto revalidated = test.Load();
+		REQUIRE(revalidated.result_ == current);
+		REQUIRE_FALSE(late->TryPublish(revalidated.result_));
+	}
+	SECTION("Eviction releases the cache while an old reader stays active") {
+		test.Cache().EvictIfCurrent(table);
+		REQUIRE_FALSE(test.Cache().Peek(test.key));
+		test.Respond("\"late\"", 304);
+		REQUIRE_THROWS_WITH(test.Load(), Catch::Contains("HTTP 304 without a cached response to revalidate"));
+		REQUIRE_FALSE(late->TryPublish(response));
+	}
+	REQUIRE(parsed->GetLatestSnapshot().get() == snapshot.get());
+	REQUIRE(parsed->GetTableProperty("owner-test").empty());
+}
+
+TEST_CASE("Staleness reads and table copies share metadata until a writer detaches", "[iceberg_cache]") {
+	LoadTableCacheTest test;
+	auto &table = test.Table();
+	auto parsed = table.GetMetadataOwner();
+	auto copy = table.Copy();
+	auto &transaction = IcebergTransaction::Get(*test.connection.context, test.Catalog());
+	auto transaction_copy = table.Copy(transaction);
+	REQUIRE(copy.GetMetadataOwner() == parsed);
+	REQUIRE(transaction_copy.GetMetadataOwner() == parsed);
+
+	// The existing entry has no staleness expiry; republish it with a configured lifetime.
+	test.Catalog().attach_options.max_table_staleness_micros = 3600000000ULL;
+	auto publication = test.Cache().BeginLoad(test.key);
+	REQUIRE(publication->TryPublish(test.Cache().Peek(test.key)));
+	auto reader = IcebergTable::CreatePlaceholder(test.Catalog(), table.schema, table.name);
+	REQUIRE(
+	    test.Cache().Get(*test.connection.context, test.key, [&](shared_ptr<const IcebergLoadTableResponse> response) {
+		    reader->InitializeFromCatalogResponse(*test.connection.context, std::move(response));
+	    }));
+	REQUIRE(reader->GetMetadataOwner() == parsed);
+
+	auto &writable = copy.GetMetadataMutable();
+	writable.table_properties["owner-test"] = "private";
+	REQUIRE(copy.GetMetadataOwner() != parsed);
+	REQUIRE(reader->GetMetadata().GetTableProperty("owner-test").empty());
+	REQUIRE(table.GetMetadata().GetTableProperty("owner-test").empty());
+	REQUIRE(transaction_copy.GetMetadataOwner() == parsed);
+	// A scan may retain the private version while a later statement writes again.
+	auto scan_owner = copy.GetMetadataOwner();
+	copy.GetMetadataMutable().table_properties["owner-test"] = "next";
+	REQUIRE(scan_owner->GetTableProperty("owner-test") == "private");
+	REQUIRE(copy.GetMetadata().GetTableProperty("owner-test") == "next");
+	REQUIRE(scan_owner != copy.GetMetadataOwner());
+}
+
+TEST_CASE("Authoritative metadata fallback does not poison a parsed generation", "[iceberg_cache]") {
+	LoadTableCacheTest test;
+	auto &table = test.Table();
+	test.Catalog().attach_options.use_metadata_location = true;
+	auto wire = table.initialization_source->result.Copy();
+	const auto path = test.root + "/authoritative.metadata.json";
+	wire.metadata_location = path;
+	auto response = make_shared_ptr<const IcebergLoadTableResponse>(std::move(wire));
+	auto fallback = response->GetMetadata(*test.connection.context, table);
+	auto authoritative = fallback->Copy();
+	authoritative.table_properties["owner-test"] = "file";
+	authoritative.WriteMetadata(*test.connection.context, path);
+	auto from_file = response->GetMetadata(*test.connection.context, table);
+	REQUIRE(from_file != fallback);
+	REQUIRE(from_file->GetTableProperty("owner-test") == "file");
+	REQUIRE(fallback->GetTableProperty("owner-test").empty());
+	REQUIRE(response->GetMetadata(*test.connection.context, table) == from_file);
+	// A different response generation with no authoritative location must use its embedded metadata.
+	auto embedded_wire = table.initialization_source->result.Copy();
+	embedded_wire.metadata_location.reset();
+	auto embedded = make_shared_ptr<const IcebergLoadTableResponse>(std::move(embedded_wire));
+	REQUIRE(embedded->GetMetadata(*test.connection.context, table) != from_file);
+	REQUIRE(embedded->GetMetadata(*test.connection.context, table)->GetTableProperty("owner-test").empty());
+}
+
+TEST_CASE("Concurrent readers share one parsed payload and release superseded generations", "[iceberg_cache]") {
+	LoadTableCacheTest test;
+	auto &table = test.Table();
+	auto response = make_shared_ptr<const IcebergLoadTableResponse>(table.initialization_source->result.Copy());
+	test.Cache().SetOrOverwrite(test.key, response);
+	weak_ptr<const IcebergLoadTableResponse> response_lifetime(response);
+	Connection left(test.database);
+	Connection right(test.database);
+	shared_ptr<const IcebergTableMetadata> readers[2];
+	std::exception_ptr errors[2];
+	std::mutex gate;
+	std::condition_variable ready;
+	idx_t waiting = 0;
+	bool start = false;
+	auto read = [&](idx_t index, Connection &connection) {
+		{
+			std::unique_lock<std::mutex> guard(gate);
+			waiting++;
+			ready.notify_all();
+			ready.wait(guard, [&] { return start; });
+		}
+		try {
+			readers[index] = response->GetMetadata(*connection.context, table);
+		} catch (...) {
+			errors[index] = std::current_exception();
+		}
+	};
+	// Only immutable metadata is shared; each thread has its own ClientContext. No catalog or file mutations.
+	std::thread first(read, 0, std::ref(left));
+	std::thread second(read, 1, std::ref(right));
+	{
+		std::unique_lock<std::mutex> guard(gate);
+		ready.wait(guard, [&] { return waiting == 2; });
+		start = true;
+	}
+	ready.notify_all();
+	first.join();
+	second.join();
+	for (auto &error : errors) {
+		if (error) {
+			std::rethrow_exception(error);
+		}
+	}
+	REQUIRE(readers[0] == readers[1]);
+	REQUIRE(readers[0] != table.GetMetadataOwner());
+	weak_ptr<const IcebergTableMetadata> parsed_lifetime(readers[0]);
+	test.Cache().SetOrOverwrite(test.key, table.initialization_source);
+	response.reset();
+	REQUIRE(response_lifetime.expired());
+	REQUIRE_FALSE(parsed_lifetime.expired());
+	REQUIRE(readers[0]->GetLatestSnapshot());
+	readers[0].reset();
+	REQUIRE_FALSE(parsed_lifetime.expired());
+	readers[1].reset();
+	REQUIRE(parsed_lifetime.expired());
+}
+
+TEST_CASE("Historical transaction metadata has its own owner outside the head cache", "[iceberg_cache]") {
+	LoadTableCacheTest test;
+	auto &table = test.Table();
+	auto head = table.GetMetadataOwner();
+	auto historical = head->Copy();
+	historical.table_properties["owner-test"] = "historical";
+	const auto path = test.root + "/historical.metadata.json";
+	historical.WriteMetadata(*test.connection.context, path);
+
+	auto future_table = table.Copy();
+	auto &future = future_table.GetMetadataMutable();
+	auto start = IcebergUtils::GetTransactionStartTimeMS(*test.connection.context);
+	future.last_updated_ms = timestamp_ms_t(start.value + 60000);
+	future.metadata_log.clear();
+	future.metadata_log.emplace_back(path, timestamp_ms_t(start.value - 1));
+	future.table_properties["owner-test"] = "future";
+	auto &transaction = IcebergTransaction::Get(*test.connection.context, test.Catalog());
+	auto reconstructed = future_table.Copy(transaction);
+	REQUIRE(reconstructed.GetMetadataOwner() != head);
+	REQUIRE(reconstructed.GetMetadataOwner() != future_table.GetMetadataOwner());
+	REQUIRE(reconstructed.GetMetadata().GetTableProperty("owner-test") == "historical");
+	REQUIRE(future_table.GetMetadata().GetTableProperty("owner-test") == "future");
+	REQUIRE(test.Cache().Peek(test.key)->GetMetadata(*test.connection.context, table) == head);
+}
+
 TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[iceberg_cache]") {
 	for (const string scheme : {"abfs", "abfss", "az"}) {
 		for (const bool scoped : {false, true}) {
@@ -287,7 +480,7 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 				auto initial = test.Load();
 				REQUIRE_FALSE(initial.error_);
 				REQUIRE(publication->TryPublish(initial.result_));
-				IcebergTable old_table(catalog, schema, "t", *initial.result_);
+				IcebergTable old_table(catalog, schema, "t", initial.result_);
 				auto old_credentials = old_table.GetVendedCredentials(*test.connection.context);
 				auto &old_secret = scoped ? old_credentials.storage_credentials.at(0) : *old_credentials.config;
 				REQUIRE(old_secret.provider == "config");
@@ -306,7 +499,7 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 				REQUIRE_FALSE(result.error_);
 				REQUIRE(result.status_ == HTTPStatusCode::OK_200);
 				REQUIRE(test.LastValidator().IsNull());
-				IcebergTable fresh_table(catalog, schema, "t", *result.result_);
+				IcebergTable fresh_table(catalog, schema, "t", result.result_);
 				auto credentials = fresh_table.GetVendedCredentials(*test.connection.context);
 				auto &secret = scoped ? credentials.storage_credentials.at(0) : *credentials.config;
 				REQUIRE(StringUtil::Contains(secret.options.at("connection_string").ToString(), fresh));

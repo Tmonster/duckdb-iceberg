@@ -76,7 +76,7 @@ IcebergLoadTableResult IcebergMetastoreCatalog::LoadTable(ClientContext &context
 	load_table_result->metadata = IcebergTableMetadata::Parse(metadata_location, fs, "none");
 	load_table_result->metadata_location = metadata_location;
 	result.status_ = HTTPStatusCode::OK_200;
-	result.result_ = std::move(load_table_result);
+	result.result_ = make_shared_ptr<const IcebergLoadTableResponse>(std::move(*load_table_result));
 	return result;
 }
 
@@ -115,7 +115,7 @@ string IcebergMetastoreCatalog::PurgeLocation(const IcebergTable &table) const {
 		return string();
 	}
 	// Only remove files that belong to the catalog's warehouse
-	auto &location = table.table_metadata.GetLocation();
+	auto &location = table.GetMetadata().GetLocation();
 	return InWarehouse(location) ? location : string();
 }
 
