@@ -41,7 +41,7 @@ void IcebergClientCommitVerifier::Prepare(const rest_api_objects::CommitTableReq
 			                        TableName(table.namespace_items, table.table_name),
 			                        load_result.error_->_error.message);
 		}
-		auto &load_table_result = *load_result.result_;
+		auto &load_table_result = load_result.result_->result;
 		table.base =
 		    make_uniq<IcebergTableMetadata>(IcebergTableMetadata::FromTableMetadata(load_table_result.metadata));
 		if (load_table_result.metadata_location) {
@@ -116,7 +116,7 @@ void IcebergClientCommitVerifier::Verify(optional_ptr<const string> commit_respo
 			                        TableName(table.namespace_items, table.table_name),
 			                        load_result.error_->_error.message);
 		}
-		VerifyTable(table, IcebergTableMetadata::FromTableMetadata(load_result.result_->metadata));
+		VerifyTable(table, IcebergTableMetadata::FromTableMetadata(load_result.result_->result.metadata));
 	}
 }
 

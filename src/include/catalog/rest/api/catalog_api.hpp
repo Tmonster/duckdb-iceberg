@@ -17,6 +17,7 @@
 namespace duckdb {
 
 class IcebergRestCatalog;
+class IcebergLoadTableResponse;
 struct IcebergCreateTableRequest;
 class IcebergSchemaEntry;
 class IcebergTableSchemaVersion;
@@ -60,7 +61,7 @@ public:
 	//! 'cached_result'. 'response_etag' receives the ETag the server sent (empty if none).
 	static IcebergLoadTableResult LoadTable(ClientContext &context, IcebergRestCatalog &catalog,
 	                                        const vector<string> &namespace_items, const string &table_name,
-	                                        const shared_ptr<const rest_api_objects::LoadTableResult> &cached_result,
+	                                        const shared_ptr<const IcebergLoadTableResponse> &cached_result,
 	                                        const string &etag, string &response_etag);
 	//! Returns 'nullopt' if the catalog refused the listing and 'allow_forbidden' is set.
 	static IcebergListTablesResult ListTables(ClientContext &context, IcebergRestCatalog &catalog,
