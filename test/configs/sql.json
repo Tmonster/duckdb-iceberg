@@ -106,7 +106,9 @@
 		{
 			"reason": "The test asserts the REST catalog's HTTP 409 conflict response; SQL catalog conflicts are reported by the failed commit requirement",
 			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_multiple_transactions_retry_disabled.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_multiple_transactions_retry_disabled.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_atomic.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_conflict.test"
 			]
 		},
 		{
