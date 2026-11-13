@@ -1,5 +1,7 @@
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 
+#include "duckdb/common/types/timestamp.hpp"
+
 #include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/common/enums/catalog_type.hpp"
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
@@ -29,6 +31,45 @@ IcebergCreateTableRequest::IcebergCreateTableRequest(string name_p, shared_ptr<I
     : name(std::move(name_p)), schema(std::move(schema_p)), partition_spec(std::move(partition_spec_p)),
       sort_order(std::move(sort_order_p)), iceberg_version(iceberg_version_p),
       table_properties(std::move(table_properties_p)), location(std::move(location_p)) {
+}
+
+IcebergTableMetadata IcebergCreateTableRequest::CreateInitialMetadata(const string &table_uuid,
+                                                                     const string &table_location) const {
+	if (!schema) {
+		throw InternalException("Attempted to create table metadata without a schema");
+	}
+	auto initial_schema = schema->Copy();
+	initial_schema->schema_id = 0;
+	unordered_map<int32_t, shared_ptr<const IcebergTableSchema>> schemas;
+	schemas.emplace(0, initial_schema);
+	IcebergTableMetadata result {IcebergTableMetadataSchemas(std::move(schemas))};
+	result.table_uuid = table_uuid;
+	result.location = table_location;
+	result.iceberg_version = NumericCast<int32_t>(iceberg_version);
+	result.SetCurrentSchemaId(0);
+	result.last_column_id = initial_schema->GetMaxFieldId();
+
+	// Partition field ids start at 1000, so an unpartitioned table has last-partition-id 999
+	int32_t last_partition_id = 999;
+	auto initial_spec = partition_spec;
+	initial_spec.spec_id = 0;
+	for (auto &field : initial_spec.fields) {
+		last_partition_id = MaxValue<int32_t>(last_partition_id, NumericCast<int32_t>(field.partition_field_id));
+	}
+	result.partition_specs.emplace(0, std::move(initial_spec));
+	result.default_spec_id = 0;
+	result.last_partition_field_id = last_partition_id;
+
+	result.sort_specs.emplace(sort_order.sort_order_id, sort_order);
+	result.default_sort_order_id = sort_order.sort_order_id;
+
+	result.table_properties = table_properties;
+	result.last_updated_ms = timestamp_ms_t(Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp()));
+	result.last_sequence_number = 0;
+	if (result.iceberg_version >= 3) {
+		result.next_row_id = 0;
+	}
+	return result;
 }
 
 static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, const IcebergColumnDefinition &column);

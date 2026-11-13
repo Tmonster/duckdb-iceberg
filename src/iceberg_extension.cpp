@@ -33,6 +33,7 @@
 #include "function/copy/iceberg_copy_function.hpp"
 #include "duckdb/planner/planner_extension.hpp"
 #include "planning/iceberg_planner.hpp"
+#include "catalog/metastore/iceberg_metastore_commit.hpp"
 
 namespace duckdb {
 
@@ -126,6 +127,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          "DEBUG SETTING: also apply every table commit sent to a REST catalog client-side, and "
 	                          "verify that the result matches the table metadata the catalog produced",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(IcebergMetastoreTransactionCommit::FAULT_SETTING,
+	                          "DEBUG SETTING: in metastore catalogs (SQL, Glue, filesystem), fail after a successful "
+	                          "change with a lost response ('lose_response'), and also fail checking what was applied "
+	                          "('unreachable')",
+	                          LogicalType::VARCHAR, Value());
 	config.AddExtensionOption("iceberg_test_force_token_expiry",
 	                          "DEBUG SETTING: force OAuth2 token expiry for testing automatic refresh",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
