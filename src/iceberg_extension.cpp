@@ -1,4 +1,5 @@
 #include "iceberg_extension.hpp"
+#include "catalog/rest/transaction/iceberg_client_commit_verifier.hpp"
 #include "execution/operator/iceberg_written_files.hpp"
 
 #include "duckdb/main/secret/secret_manager.hpp"
@@ -121,6 +122,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Skip structural Puffin verification for deletion-vector files. This unsafe compatibility option permits "
 	    "reading invalid bare-blob files written by DuckDB Iceberg 1.5.3.",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(IcebergClientCommitVerifier::SETTING_NAME,
+	                          "DEBUG SETTING: also apply every table commit sent to a REST catalog client-side, and "
+	                          "verify that the result matches the table metadata the catalog produced",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
 	config.AddExtensionOption("iceberg_test_force_token_expiry",
 	                          "DEBUG SETTING: force OAuth2 token expiry for testing automatic refresh",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));

@@ -1,4 +1,5 @@
 #include "catalog/rest/transaction/iceberg_rest_commit.hpp"
+#include "catalog/rest/transaction/iceberg_client_commit_verifier.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/timestamp.hpp"
@@ -230,9 +231,19 @@ void IcebergRestTransactionCommit::DoMultiTableCommitUpdates(IcebergTransactionA
 			backoff.emplace(transaction_info.retry_config);
 		}
 
+		unique_ptr<IcebergClientCommitVerifier> verifier;
+		if (IcebergClientCommitVerifier::IsEnabled(context)) {
+			verifier = make_uniq<IcebergClientCommitVerifier>(context, catalog);
+			for (auto &table_change : transaction_info.request.table_changes) {
+				verifier->Prepare(table_change);
+			}
+		}
 		auto transaction_json = RESTObjectToJSONString(transaction_info.request);
 		auto result = IRCAPI::CommitMultiTableUpdate(context, catalog, transaction_json);
 		if (result.Success()) {
+			if (verifier) {
+				verifier->Verify(nullptr);
+			}
 			return;
 		}
 		if (!CommitIsRetryable(transaction_info.retryable, transaction_info.retry_config.num_retries, result,
@@ -268,10 +279,18 @@ void IcebergRestTransactionCommit::DoSingleTableCommitUpdates(IcebergTransaction
 		auto &table_change = table_transaction_info.request;
 		D_ASSERT(table_change.identifier);
 		auto &identifier = *table_change.identifier;
+		unique_ptr<IcebergClientCommitVerifier> verifier;
+		if (IcebergClientCommitVerifier::IsEnabled(context)) {
+			verifier = make_uniq<IcebergClientCommitVerifier>(context, catalog);
+			verifier->Prepare(table_change);
+		}
 		auto transaction_json = ConstructTableUpdateJSON(table_change);
 		auto result =
 		    IRCAPI::CommitTableUpdate(context, catalog, identifier._namespace.value, identifier.name, transaction_json);
 		if (result.Success()) {
+			if (verifier) {
+				verifier->Verify(&result.body);
+			}
 			return;
 		}
 
