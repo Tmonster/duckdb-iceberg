@@ -1,0 +1,102 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/glue/ddl.test
+# description: Databases, renames, drops and single-table transactions in the Iceberg Glue catalog
+# group: [glue]
+
+require-env CATALOG_TEST_CONFIG_SETUP glue
+
+include test/sql/init_requires
+
+statement ok
+CREATE SCHEMA my_datalake.glue_ns;
+
+# Glue has no nested namespaces
+statement error
+CREATE SCHEMA my_datalake."a.b";
+----
+AWS Glue has no nested namespaces
+
+# A database's LocationUri is its 'location' property, and the default location of its tables
+statement ok
+CALL set_iceberg_schema_properties(my_datalake.glue_ns, {'location': '{TEMP_DIR}/glue_custom_location', 'owner': 'me'});
+
+query II
+SELECT key, value FROM iceberg_schema_properties('my_datalake.glue_ns') ORDER BY ALL;
+----
+location	{TEMP_DIR}/glue_custom_location
+owner	me
+
+statement ok
+CREATE TABLE my_datalake.glue_ns.t AS SELECT range AS i FROM range(4);
+
+query I
+SELECT count(*) > 0 FROM glob('{TEMP_DIR}/glue_custom_location/t/metadata/*.metadata.json');
+----
+true
+
+statement ok
+CREATE TABLE my_datalake.glue_ns.other (i BIGINT);
+
+# Glue can't change several tables atomically
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.glue_ns.t VALUES (10);
+
+statement error
+INSERT INTO my_datalake.glue_ns.other VALUES (10);
+----
+Iceberg Glue catalog cannot commit this transaction atomically
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT sum(i) FROM my_datalake.glue_ns.t;
+----
+6
+
+# Glue can't rename a table: the new table points at the same metadata, the old one is dropped
+statement ok
+ALTER TABLE my_datalake.glue_ns.t RENAME TO renamed;
+
+query I
+SELECT sum(i) FROM my_datalake.glue_ns.renamed;
+----
+6
+
+statement error
+SELECT * FROM my_datalake.glue_ns.t;
+----
+does not exist
+
+statement error
+ALTER TABLE my_datalake.glue_ns.renamed RENAME TO other;
+----
+already exists
+
+# Like the JDBC catalog, a database can only be dropped once it is empty (DeleteDatabase would drop its tables)
+statement error
+DROP SCHEMA my_datalake.glue_ns;
+----
+Namespace glue_ns is not empty
+
+# Dropping a table only unregisters it, its files stay
+statement ok
+DROP TABLE my_datalake.glue_ns.renamed;
+
+statement ok
+DROP TABLE my_datalake.glue_ns.other;
+
+query I
+SELECT count(*) > 0 FROM glob('{TEMP_DIR}/glue_custom_location/t/metadata/*.metadata.json');
+----
+true
+
+statement ok
+DROP SCHEMA my_datalake.glue_ns;
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'my_datalake' AND schema_name = 'glue_ns';
+----
+0

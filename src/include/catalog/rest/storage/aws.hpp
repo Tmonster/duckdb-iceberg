@@ -14,7 +14,8 @@ public:
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
 	                                 const string &data);
 	//! The headers to send with this request: the signed headers and the Authorization header holding their
-	//! SigV4 signature. Of 'headers', only Content-Type and X-Iceberg-Access-Delegation are signed and forwarded.
+	//! SigV4 signature. Of 'headers', only Content-Type, X-Amz-Target and X-Iceberg-Access-Delegation are signed and
+	//! forwarded.
 	HTTPHeaders SignRequest(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
 	                        const string &data) const;
 
