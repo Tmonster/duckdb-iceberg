@@ -90,6 +90,15 @@ unique_ptr<Connection> IcebergSqlCatalog::Connect() {
 //! (e.g. a concurrent write to the same catalog row) by their C++ type
 [[noreturn]] static void ThrowQueryError(const ErrorData &error) {
 	auto message = "Iceberg SQL catalog query failed: " + error.RawMessage();
+	// Writes that conflict with a concurrent transaction, which a commit retries: SQLite reports them without waiting
+	// for the other writer, PostgreSQL as serialization failures (SQLSTATE 40001) or deadlocks (40P01)
+	static const char *const CONFLICT_MESSAGES[] = {"database is locked", "could not serialize access",
+	                                                "deadlock detected"};
+	for (auto conflict_message : CONFLICT_MESSAGES) {
+		if (StringUtil::Contains(error.RawMessage(), conflict_message)) {
+			throw TransactionException(message);
+		}
+	}
 	switch (error.Type()) {
 	case ExceptionType::TRANSACTION:
 		throw TransactionException(message);
@@ -153,9 +162,15 @@ void IcebergSqlCatalog::Initialize(ClientContext &context) {
 	if (!attached.empty()) {
 		database_name = attached[0][0].ToString();
 	} else {
+		string attach_options = read_only ? ", READ_ONLY" : "";
+		if (uri.storage_type == "sqlite") {
+			// Wait for concurrent writers (other connections or processes) instead of failing right away. In WAL mode
+			// readers don't block a commit, e.g. a DuckDB transaction that listed all tables, including these ones.
+			attach_options += ", BUSY_TIMEOUT 5000, JOURNAL_MODE 'WAL'";
+		}
 		auto attach = StringUtil::Format("ATTACH %s AS %s (TYPE %s%s)", KeywordHelper::WriteQuoted(uri.path),
 		                                 KeywordHelper::WriteOptionallyQuoted(database_name), uri.storage_type,
-		                                 read_only ? ", READ_ONLY" : "");
+		                                 attach_options);
 		Query(*connection, attach);
 	}
 	if (init_catalog_tables && !read_only) {

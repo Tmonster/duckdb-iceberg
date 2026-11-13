@@ -34,6 +34,23 @@ if (NOT EMSCRIPTEN)
   #        GIT_TAG 417a9117f590e8141742ac0579d02f6a90162e37
   #)
 
+  # Databases that can hold an Iceberg SQL catalog (CATALOG_TYPE 'sql'), for the SQL catalog tests.
+  # Pinned to the versions of DuckDB's extension configs, see duckdb/.github/config/extensions/.
+  duckdb_extension_load(sqlite_scanner
+          GIT_URL https://github.com/duckdb/duckdb-sqlite
+          GIT_TAG e223dc01493414cef6d5960744f1e048d59fc592
+          SUBMODULES database-connector
+  )
+  # The PostgreSQL client library makes this a slower build, only needed to test SQL catalogs in PostgreSQL
+  if (DEFINED ENV{ICEBERG_SQL_CATALOG_POSTGRES} AND NOT MINGW)
+    duckdb_extension_load(postgres_scanner
+            GIT_URL https://github.com/duckdb/duckdb-postgres
+            GIT_TAG c0f5a3c0c4b68b02afbf669d36d7f0e503985c88
+            APPLY_PATCHES
+            SUBMODULES database-connector
+    )
+  endif()
+
   if (NOT MINGW)
     duckdb_extension_load(aws
             LOAD_TESTS

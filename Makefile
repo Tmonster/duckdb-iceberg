@@ -21,6 +21,12 @@ ifeq (${EQUALITY_DELETE_WRITES_ENABLED}, 1)
 	EXT_FLAGS:=${EXT_FLAGS} -DICEBERG_ENABLE_EQUALITY_DELETE_WRITES=1
 endif
 
+# Also build the postgres_scanner extension (see extension_config.cmake), to test Iceberg SQL catalogs in PostgreSQL
+ifneq ($(ICEBERG_SQL_CATALOG_POSTGRES),)
+	export ICEBERG_SQL_CATALOG_POSTGRES
+	EXT_FLAGS:=${EXT_FLAGS} -DVCPKG_MANIFEST_FEATURES=postgres
+endif
+
 # CI runs slow tests in the dedicated catalog workflows.
 ifeq ($(GITHUB_ACTIONS),true)
 T ?= "test/*" "exclude:*.test_slow"
