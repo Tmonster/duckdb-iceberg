@@ -42,6 +42,8 @@ struct LastAdded {
 	optional<int32_t> spec_id;
 	optional<int32_t> sort_order_id;
 	vector<int64_t> snapshot_ids;
+	//! Whether a remove-snapshots update ran, so the snapshot log must drop its history up to removed entries
+	bool removed_snapshots = false;
 };
 
 int32_t ResolveLastAdded(int32_t id, const optional<int32_t> &last_added, const char *kind) {
@@ -191,6 +193,46 @@ void ApplySetSnapshotRef(IcebergTableMetadata &metadata, const rest_api_objects:
 	metadata.current_snapshot_id = reference.snapshot_id;
 }
 
+//! Like Iceberg Java's TableMetadata.Builder.removeSnapshots: unknown ids are ignored, and refs that point to a
+//! removed snapshot are dropped (dropping main clears the current snapshot)
+void ApplyRemoveSnapshots(IcebergTableMetadata &metadata, const rest_api_objects::RemoveSnapshotsUpdate &update,
+                          LastAdded &last_added) {
+	for (auto snapshot_id : update.snapshot_ids) {
+		metadata.snapshots.erase(snapshot_id);
+	}
+	last_added.removed_snapshots = true;
+	if (metadata.refs) {
+		auto &refs = metadata.refs->additional_properties;
+		for (auto it = refs.begin(); it != refs.end();) {
+			if (metadata.snapshots.count(it->second.snapshot_id)) {
+				++it;
+				continue;
+			}
+			if (it->first == "main") {
+				metadata.current_snapshot_id = optional<int64_t>();
+			}
+			it = refs.erase(it);
+		}
+	}
+	if (metadata.current_snapshot_id && !metadata.snapshots.count(*metadata.current_snapshot_id)) {
+		metadata.current_snapshot_id = optional<int64_t>();
+	}
+}
+
+//! After snapshots are removed, a log entry for a removed snapshot drops all history before it, so time travel
+//! never skips a period in which a removed snapshot was current (Iceberg Java's updateSnapshotLog)
+void PruneSnapshotLog(IcebergTableMetadata &metadata) {
+	vector<pair<int64_t, timestamp_ms_t>> pruned;
+	for (auto &entry : metadata.snapshot_log) {
+		if (metadata.snapshots.count(entry.first)) {
+			pruned.push_back(entry);
+		} else {
+			pruned.clear();
+		}
+	}
+	metadata.snapshot_log = std::move(pruned);
+}
+
 void ApplyUpdate(IcebergTableMetadata &metadata, const rest_api_objects::TableUpdate &update, bool creating,
                  LastAdded &last_added, timestamp_ms_t commit_time) {
 	if (update.assign_uuidupdate) {
@@ -250,6 +292,8 @@ void ApplyUpdate(IcebergTableMetadata &metadata, const rest_api_objects::TableUp
 		for (auto &property : update.remove_properties_update->removals) {
 			metadata.table_properties.erase(property);
 		}
+	} else if (update.remove_snapshots_update) {
+		ApplyRemoveSnapshots(metadata, *update.remove_snapshots_update, last_added);
 	} else if (update.set_location_update) {
 		metadata.location = update.set_location_update->location;
 		StringUtil::RTrim(metadata.location, "/");
@@ -378,6 +422,9 @@ IcebergTableMetadata IcebergClientCommit::Apply(optional_ptr<const IcebergTableM
 	LastAdded last_added;
 	for (auto &update : request.updates) {
 		ApplyUpdate(result, update, creating, last_added, commit_time);
+	}
+	if (last_added.removed_snapshots) {
+		PruneSnapshotLog(result);
 	}
 	if (creating) {
 		if (result.table_uuid.empty()) {
