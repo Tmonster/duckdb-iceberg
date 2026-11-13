@@ -267,12 +267,9 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		// To be used later to add partitioning info to the data file
 		case_insensitive_map_t<reference<const IcebergPartitionSpecField>> partition_colname_to_field;
 
-		// this is a weird case with partitioned inserts.
-		// Lakekeeper requires paritition fields to not have the same names as the columns (if there is a transform)
-		// So now our partition field names always include the transform name
-		// But if there are only identity transforms, we don't add a projection to the insert, so we can just use
-		// regular column names. So here when we populate our map, if there are transforms present, we need to use our
-		// transform partition column names. If not, we should use the identify names.
+		// The copy operator reports a partition value under the name of the column it partitioned on: a computed
+		// column named after the partition field, or the written column itself when every field is the identity
+		// of a top-level column (see BuildWriteLayout).
 		if (!CanWriteIdentityPartitionsDirectly(ic_partition_info, ic_schema)) {
 			for (auto &partition_field : ic_partition_info.fields) {
 				partition_colname_to_field.emplace(partition_field.GetPartitionSpecFieldName(), partition_field);
@@ -515,7 +512,13 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, const 
 	if (source_type == LogicalTypeId::TIMESTAMP_TZ_NS) {
 		target_type = LogicalType::TIMESTAMP_NS;
 	}
-	source = BoundCastExpression::AddDefaultCastToType(std::move(source), target_type);
+	if (source->GetReturnType() != target_type) {
+		// the built-in TIMESTAMPTZ -> TIMESTAMP cast keeps the UTC value, independent of the session time zone
+		CastFunctionSet default_casts;
+		auto get_input = GetCastFunctionInput::Default();
+		auto bound_cast = default_casts.GetCastFunction(source->GetReturnType(), target_type, get_input);
+		source = BoundCastExpression::CreateDefault(std::move(source), target_type, std::move(bound_cast));
+	}
 	if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
 		source = BoundCastExpression::Create(std::move(source), LogicalType::TIMESTAMP,
 		                                     BoundCastInfo(CastTimestampNsToTimestampFloor));
