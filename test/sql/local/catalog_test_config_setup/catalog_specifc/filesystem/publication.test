@@ -1,0 +1,164 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/filesystem/publication.test
+# description: The Iceberg filesystem catalog publishes complete metadata files atomically, and only a committed version makes a table
+# group: [filesystem]
+
+require-env CATALOG_TEST_CONFIG_SETUP filesystem
+
+include test/sql/init_requires
+
+# A commit needs an atomic create-if-absent of a complete file, which only the local file system offers
+statement error
+ATTACH 's3://bucket/warehouse' AS remote_fs (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+----
+needs a warehouse on the local file system
+
+statement error
+ATTACH 'gs://bucket/warehouse' AS remote_fs (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+----
+needs a warehouse on the local file system
+
+statement ok
+ATTACH '{TEST_DIR}/publication_fs' AS fs (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+
+statement ok
+CREATE SCHEMA fs.ns;
+
+# A rolled-back CREATE TABLE or CTAS leaves no table, in this catalog or a fresh one
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE fs.ns.created (i INT);
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE fs.ns.ctas AS SELECT range AS i FROM range(10);
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'fs';
+----
+0
+
+statement ok
+DETACH fs;
+
+statement ok
+ATTACH '{TEST_DIR}/publication_fs' AS fs (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'fs';
+----
+0
+
+query I
+SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'fs' AND schema_name LIKE 'ns%' ORDER BY ALL;
+----
+ns
+
+# The names can be created afterwards
+statement ok
+CREATE TABLE fs.ns.ctas AS SELECT range AS i FROM range(10);
+
+query I
+SELECT sum(i) FROM fs.ns.ctas;
+----
+45
+
+# A committed table: each version is published under its final name, and no temporary file is left behind
+statement ok
+CREATE TABLE fs.ns.t (i INT);
+
+statement ok
+INSERT INTO fs.ns.t VALUES (1), (2);
+
+query I
+SELECT parse_filename(file) FROM glob('{TEST_DIR}/publication_fs/ns/t/metadata/*.json') ORDER BY ALL;
+----
+v1.metadata.json
+v2.metadata.json
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/publication_fs/ns/t/metadata/*.tmp');
+----
+0
+
+# A writer that stopped before publishing leaves a temporary file, maybe partial: it is not a version
+statement ok
+COPY (SELECT '{"format-version": 2, "truncated') TO '{TEST_DIR}/publication_fs/ns/t/metadata/.v3.metadata.json.0000.tmp' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '{"format-version": 2, "truncated') TO '{TEST_DIR}/publication_fs/ns/t/metadata/v3.metadata.json.tmp' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+DETACH fs;
+
+statement ok
+ATTACH '{TEST_DIR}/publication_fs' AS fs (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+
+query I
+SELECT sum(i) FROM fs.ns.t;
+----
+3
+
+statement ok
+INSERT INTO fs.ns.t VALUES (10);
+
+query I
+SELECT sum(i) FROM fs.ns.t;
+----
+13
+
+query I
+SELECT content FROM read_text('{TEST_DIR}/publication_fs/ns/t/metadata/version-hint.text');
+----
+3
+
+# A 'metadata' directory without a committed version (a creation that stopped before publishing) is neither a
+# table nor a namespace
+statement ok
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/publication_fs/ns/ghost' (FORMAT csv, PER_THREAD_OUTPUT);
+
+statement ok
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/publication_fs/ns/ghost/metadata' (FORMAT csv, PER_THREAD_OUTPUT);
+
+statement ok
+DETACH fs;
+
+statement ok
+ATTACH '{TEST_DIR}/publication_fs' AS fs (TYPE ICEBERG, CATALOG_TYPE 'filesystem', SUPPORT_NESTED_NAMESPACES true);
+
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'fs' ORDER BY ALL;
+----
+ctas
+t
+
+query I
+SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'fs' AND schema_name LIKE 'ns%' ORDER BY ALL;
+----
+ns
+
+statement error
+SELECT * FROM fs.ns.ghost;
+----
+does not exist
+
+# Creating the table publishes its first version over the leftovers
+statement ok
+CREATE TABLE fs.ns.ghost (i INT);
+
+statement ok
+INSERT INTO fs.ns.ghost VALUES (7);
+
+query I
+SELECT sum(i) FROM fs.ns.ghost;
+----
+7

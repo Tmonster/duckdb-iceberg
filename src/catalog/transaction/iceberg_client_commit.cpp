@@ -494,13 +494,10 @@ idx_t IcebergClientCommit::ParseMetadataVersion(const string &metadata_location)
 	return std::stoull(file_name.substr(start, end - start));
 }
 
-string IcebergClientCommit::WriteMetadataFile(ClientContext &context, IcebergTableMetadata &metadata,
-                                              optional_ptr<const IcebergTableMetadata> previous,
-                                              const string &previous_metadata_location,
-                                              const string &metadata_directory) {
-	idx_t version = 0;
+void IcebergClientCommit::RecordPreviousMetadata(IcebergTableMetadata &metadata,
+                                                 optional_ptr<const IcebergTableMetadata> previous,
+                                                 const string &previous_metadata_location) {
 	if (previous && !previous_metadata_location.empty()) {
-		version = ParseMetadataVersion(previous_metadata_location) + 1;
 		// Each entry is a metadata file and the time it became the table's current metadata
 		metadata.metadata_log.emplace_back(previous_metadata_location, previous->last_updated_ms);
 	}
@@ -514,6 +511,17 @@ string IcebergClientCommit::WriteMetadataFile(ClientContext &context, IcebergTab
 		metadata.metadata_log.erase(metadata.metadata_log.begin(),
 		                            metadata.metadata_log.begin() + NumericCast<int64_t>(excess));
 	}
+}
+
+string IcebergClientCommit::WriteMetadataFile(ClientContext &context, IcebergTableMetadata &metadata,
+                                              optional_ptr<const IcebergTableMetadata> previous,
+                                              const string &previous_metadata_location,
+                                              const string &metadata_directory) {
+	idx_t version = 0;
+	if (previous && !previous_metadata_location.empty()) {
+		version = ParseMetadataVersion(previous_metadata_location) + 1;
+	}
+	RecordPreviousMetadata(metadata, previous, previous_metadata_location);
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto file_name = StringUtil::Format("%05d-%s.metadata.json", version, UUID::ToString(UUID::GenerateRandomUUID()));

@@ -119,3 +119,21 @@ query I
 SELECT metadata_location LIKE '{TEST_DIR}/namespace_location/located/metadata/%' FROM __iceberg_sql_cat.iceberg_tables;
 ----
 true
+
+# A table created in a schema created by the same transaction, which a SQL catalog publishes together
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA cat.new_ns;
+
+statement ok
+CREATE TABLE cat.new_ns.t AS SELECT 42 AS answer;
+
+statement ok
+COMMIT;
+
+query I
+SELECT answer FROM cat.new_ns.t;
+----
+42

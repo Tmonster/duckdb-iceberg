@@ -198,11 +198,6 @@ IcebergListViewsResult IcebergGlueCatalog::ListViews(ClientContext &context, con
 	return vector<rest_api_objects::TableIdentifier>();
 }
 
-IcebergLoadViewResult IcebergGlueCatalog::LoadView(ClientContext &context, const vector<string> &namespace_items,
-                                                   const string &view_name) {
-	throw NotImplementedException("Views are not supported by Iceberg Glue catalogs");
-}
-
 string IcebergGlueCatalog::GetMetadataLocation(ClientContext &context, const IcebergMetastoreIdentifier &identifier,
                                                IcebergMetastoreEntryType type) {
 	if (type != IcebergMetastoreEntryType::TABLE) {

@@ -59,6 +59,8 @@ private:
 	void DropTable(IcebergMetastoreCommit &commit, IcebergTransactionDeleteUpdate &delete_update,
 	               ClientContext &context);
 	void RenameTable(IcebergMetastoreCommit &commit, IcebergTransactionRenameUpdate &rename_update);
+	void DropViews(IcebergMetastoreCommit &commit);
+	void CreateViews(IcebergMetastoreCommit &commit, ClientContext &context);
 	void DropNamespaces(IcebergMetastoreCommit &commit);
 	//! Remove the metadata files written by a commit attempt that did not succeed
 	void RemoveWrittenFiles(ClientContext &context);
