@@ -1,0 +1,299 @@
+#pragma once
+
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/common/optional.hpp"
+#include "duckdb/function/table_function.hpp"
+#include "duckdb/common/enums/access_mode.hpp"
+#include "duckdb/common/mutex.hpp"
+#include "duckdb/main/secret/secret_manager.hpp"
+#include "duckdb/parser/parsed_data/attach_info.hpp"
+#include "duckdb/storage/storage_extension.hpp"
+#include "duckdb/common/http_util.hpp"
+
+#include "catalog/iceberg_catalog_requests.hpp"
+#include "catalog/iceberg_schema_set.hpp"
+#include "catalog/iceberg_table_metadata_cache.hpp"
+#include "common/iceberg_utils.hpp"
+
+namespace duckdb {
+
+class IcebergSchemaEntry;
+struct IcebergTable;
+class IcebergTransaction;
+struct IcebergTransactionAlterUpdate;
+struct IcebergCreateTableRequest;
+
+class MetadataCacheValue {
+public:
+	MetadataCacheValue(timestamp_ms_t expire_timestamp_ms, shared_ptr<const IcebergLoadTableResponse> load_table_result)
+	    : expire_timestamp_ms(expire_timestamp_ms), load_table_result(std::move(load_table_result)) {
+	}
+
+public:
+	//! The timestamp until when this entry is valid
+	timestamp_ms_t expire_timestamp_ms;
+	//! The payload of the cache entry
+	shared_ptr<const IcebergLoadTableResponse> load_table_result;
+};
+
+class LoadTableResultCache;
+
+//! Caller-owned state controlling whether a fetched result can enter the cache.
+//! The cache must outlive this state, which is kept separate from worker requests.
+class LoadTableCachePublication {
+public:
+	~LoadTableCachePublication();
+	bool TryPublish(shared_ptr<const IcebergLoadTableResponse> result);
+
+private:
+	friend class LoadTableResultCache;
+	explicit LoadTableCachePublication(string table_key) : table_key(std::move(table_key)) {
+	}
+	LoadTableCachePublication(const LoadTableCachePublication &) = delete;
+	LoadTableCachePublication &operator=(const LoadTableCachePublication &) = delete;
+
+	optional_ptr<LoadTableResultCache> cache;
+	string table_key;
+};
+
+class LoadTableResultCache {
+public:
+	LoadTableResultCache(IcebergAttachOptions &attach_options) : attach_options(attach_options) {
+	}
+
+public:
+	bool Get(ClientContext &context, const string &table_key,
+	         const std::function<void(shared_ptr<const IcebergLoadTableResponse>)> &callback,
+	         bool validate_cache = true) {
+		shared_ptr<const IcebergLoadTableResponse> response;
+		{
+			annotated_lock_guard<annotated_mutex> guard(lock);
+			auto it = tables.find(table_key);
+			if (it == tables.end()) {
+				return false;
+			}
+			auto transaction_start_ms = IcebergUtils::GetTransactionStartTimeMS(context);
+			if (validate_cache && transaction_start_ms > it->second.expire_timestamp_ms) {
+				return false;
+			}
+			response = it->second.load_table_result;
+		}
+		// Metadata parsing (including authoritative file I/O) never holds the catalog-wide lock.
+		callback(std::move(response));
+		return true;
+	}
+	//! Create publication state before fetching. A later fetch supersedes earlier loads for the same key.
+	unique_ptr<LoadTableCachePublication> BeginLoad(const string &table_key);
+	//! Authoritative publication (e.g. staged creation) also invalidates outstanding fetches.
+	void SetOrOverwrite(const string &table_key, shared_ptr<const IcebergLoadTableResponse> load_table_result);
+
+	//! The result currently cached for the key, even if it has expired (nullptr if none). Any overwrite or
+	//! eviction replaces or removes it, so callers can detect that by comparing identities.
+	shared_ptr<const IcebergLoadTableResponse> Peek(const string &table_key);
+
+	//! Evict only if the table was initialized from the result that is still cached for its key.
+	void EvictIfCurrent(const IcebergTable &table);
+
+private:
+	friend class LoadTableCachePublication;
+	struct PendingLoads {
+		optional_ptr<LoadTableCachePublication> latest;
+		idx_t count = 0;
+	};
+	bool TryPublish(LoadTableCachePublication &publication, shared_ptr<const IcebergLoadTableResponse> result);
+	void Release(LoadTableCachePublication &publication);
+	void InvalidateLoads(const string &table_key) DUCKDB_REQUIRES(lock);
+	void Store(const string &table_key, shared_ptr<const IcebergLoadTableResponse> result)
+	    DUCKDB_REQUIRES(lock);
+
+	IcebergAttachOptions &attach_options;
+	annotated_mutex lock;
+	unordered_map<string, MetadataCacheValue> tables DUCKDB_GUARDED_BY(lock);
+	unordered_map<string, PendingLoads> pending_loads DUCKDB_GUARDED_BY(lock);
+};
+
+//! Which kinds of view operations a catalog supports
+enum class IcebergViewOperation : uint8_t { LIST, LOAD, CREATE };
+
+//! The kind of service that manages an Iceberg catalog's state
+enum class IcebergCatalogType : uint8_t {
+	//! Not a concrete catalog type, Cast<T> accepts any catalog type for it
+	INVALID = 0,
+	//! An Iceberg REST Catalog server
+	REST = 1
+};
+
+//! Base class of all Iceberg catalogs. It implements the DuckDB Catalog interface, planning and the
+//! transaction-local state on top of a small set of hooks that each catalog type implements:
+//! - Reads, called lazily while a transaction runs (schemas, tables, views).
+//! - CreateTable and VerifyTableUpdates, called while statements execute.
+//! - Commit, called once with all of a transaction's buffered changes.
+class IcebergCatalog : public Catalog {
+public:
+	static constexpr const IcebergCatalogType TYPE = IcebergCatalogType::INVALID;
+
+public:
+	explicit IcebergCatalog(IcebergCatalogType catalog_type, AttachedDatabase &db_p, AccessMode access_mode,
+	                        IcebergAttachOptions &attach_options, const optional<Identifier> &default_schema);
+	~IcebergCatalog() override;
+
+public:
+	IcebergCatalogType GetIcebergCatalogType() const {
+		return catalog_type;
+	}
+	template <class TARGET>
+	TARGET &Cast() {
+		if (TARGET::TYPE != IcebergCatalogType::INVALID && catalog_type != TARGET::TYPE) {
+			throw InternalException("Failed to cast Iceberg catalog to type - Iceberg catalog type mismatch");
+		}
+		return reinterpret_cast<TARGET &>(*this);
+	}
+	template <class TARGET>
+	const TARGET &Cast() const {
+		if (TARGET::TYPE != IcebergCatalogType::INVALID && catalog_type != TARGET::TYPE) {
+			throw InternalException("Failed to cast Iceberg catalog to type - Iceberg catalog type mismatch");
+		}
+		return reinterpret_cast<const TARGET &>(*this);
+	}
+
+public:
+	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
+	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
+	static unique_ptr<SecretEntry> GetHTTPSecret(ClientContext &context, const string &secret_name);
+	string GetWarehouse() const {
+		return warehouse;
+	}
+	//! Whether or not this catalog should search a specific type with the standard priority
+	CatalogLookupBehavior CatalogTypeLookupRule(CatalogType type) const override {
+		switch (type) {
+		case CatalogType::TABLE_FUNCTION_ENTRY:
+		case CatalogType::SCALAR_FUNCTION_ENTRY:
+		case CatalogType::AGGREGATE_FUNCTION_ENTRY:
+			return CatalogLookupBehavior::NEVER_LOOKUP;
+		default:
+			return CatalogLookupBehavior::STANDARD;
+		}
+	}
+	bool CheckAmbiguousCatalogOrSchema(ClientContext &context, const Identifier &schema) override {
+		return false;
+	}
+	optional<Identifier> GetDefaultSchema() const override;
+	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
+	//! Applies IDENTIFIER_CASE to a namespace or table name
+	string FoldIdentifier(const string &name) const;
+	//! Applies IDENTIFIER_CASE to the schema and name parts, keeping the catalog alias as written
+	QualifiedName FoldName(const QualifiedName &name) const;
+
+public:
+	void Initialize(bool load_builtin) override;
+	string GetCatalogType() override {
+		return "iceberg";
+	}
+	bool SupportsTimeTravel() const override {
+		return true;
+	}
+	void DropSchema(ClientContext &context, DropInfo &info) override;
+	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
+	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
+	IcebergSchemaSet &GetSchemas();
+	optional_ptr<SchemaCatalogEntry> LookupSchema(CatalogTransaction transaction, const EntryLookupInfo &schema_lookup,
+	                                              OnEntryNotFound if_not_found) override;
+	PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
+	                             optional_ptr<PhysicalOperator> plan) override;
+	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
+	                                    PhysicalOperator &plan) override;
+	//! Plans a copy-on-write DELETE itself; any other DELETE plans its child and continues below
+	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op) override;
+	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
+	                             PhysicalOperator &plan) override;
+	//! Shared delete-planning body both PlanDelete and MERGE build on; only PlanDelete additionally opts the
+	//! standalone DELETE into metadata-only deletes, so MERGE must plan its delete action through here directly.
+	PhysicalOperator &PlanDeleteOperation(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
+	                                      PhysicalOperator &plan);
+	PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
+	                             PhysicalOperator &plan) override;
+	PhysicalOperator &PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,
+	                                PhysicalOperator &plan) override;
+	unique_ptr<LogicalOperator> BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
+	                                            unique_ptr<LogicalOperator> plan) override;
+	DatabaseSize GetDatabaseSize(ClientContext &context) override;
+	//! Whether or not this is an in-memory Iceberg database
+	bool InMemory() override;
+	string GetDBPath() override;
+	//! Allow ATTACH OR REPLACE to actually re-attach when iceberg-specific options change
+	bool HasConflictingAttachOptions(const string &path, const AttachOptions &options) override;
+	void SetAttachOptions(const unordered_map<string, Value> &options);
+	//! Throws if the write mode property doesn't allow merge-on-read delete files, which is all DuckDB-Iceberg writes
+	static void VerifyMergeOnRead(const IcebergTableMetadata &metadata, const string &table_name,
+	                              const string &write_mode_property);
+
+public:
+	//===--------------------------------------------------------------------===//
+	// Catalog type hooks: reads
+	//===--------------------------------------------------------------------===//
+	virtual bool SchemaExists(ClientContext &context, const string &schema_name) = 0;
+	virtual IcebergListSchemasResult ListSchemas(ClientContext &context, const vector<string> &parent) = 0;
+	virtual APIResult<unique_ptr<const rest_api_objects::GetNamespaceResponse>>
+	LoadSchemaProperties(ClientContext &context, const IcebergSchemaEntry &schema) = 0;
+	//! Returns 'nullopt' if the listing was refused (and 'allow_forbidden' is set), which is not an empty schema.
+	virtual IcebergListTablesResult ListTables(ClientContext &context, const vector<string> &namespace_items,
+	                                           bool allow_forbidden) = 0;
+	virtual IcebergLoadTableResult LoadTable(ClientContext &context, const vector<string> &namespace_items,
+	                                         const string &table_name) = 0;
+	virtual bool SupportsViews(IcebergViewOperation operation) const = 0;
+	virtual IcebergListViewsResult ListViews(ClientContext &context, const vector<string> &namespace_items) = 0;
+	virtual IcebergLoadViewResult LoadView(ClientContext &context, const vector<string> &namespace_items,
+	                                       const string &view_name) = 0;
+
+	//===--------------------------------------------------------------------===//
+	// Catalog type hooks: statement time
+	//===--------------------------------------------------------------------===//
+	//! Add the table described by 'request' to the current transaction, with the updates that create it at commit
+	virtual IcebergTable &CreateTable(ClientContext &context, IcebergSchemaEntry &schema,
+	                                  const IcebergCreateTableRequest &request) = 0;
+	//! Throws if the catalog cannot drop the schema as requested, e.g. with CASCADE
+	virtual void VerifyDropSchema(const DropInfo &info) const;
+	//! Throws if the catalog cannot commit the table updates of 'alter_update' atomically
+	virtual void VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const {
+	}
+
+	//===--------------------------------------------------------------------===//
+	// Catalog type hooks: commit
+	//===--------------------------------------------------------------------===//
+	//! Publish all changes buffered by 'transaction'. Only called for transactions that changed something.
+	virtual void Commit(IcebergTransaction &transaction) = 0;
+
+protected:
+	//! Register a table created by the current transaction
+	IcebergTable &AddCreatedTable(ClientContext &context, IcebergTable &&table);
+	//! Add the updates that create 'table_info' at commit: its uuid, format version, schema, partition spec,
+	//! sort order, location and properties
+	void AddCreateTableUpdates(ClientContext &context, IcebergTable &table_info);
+
+private:
+	const IcebergCatalogType catalog_type;
+
+public:
+	AccessMode access_mode;
+	string namespace_separator = "\x1f";
+	//! attach options
+	IcebergAttachOptions attach_options;
+	//! Optionally (user-)provided default schema to use
+	optional<Identifier> default_schema;
+	//! Catalog-level defaults/overrides for table properties (e.g. 's3.sse.type')
+	case_insensitive_map_t<string> catalog_properties;
+
+protected:
+	//! Original client selector, used for ATTACH OR REPLACE comparisons.
+	const string attach_path;
+	//! warehouse
+	string warehouse;
+	//! Normalized attach options (after core stripping) used to detect a conflicting ATTACH OR REPLACE
+	unordered_map<string, Value> normalized_attach_options;
+
+public:
+	IcebergSchemaSet schemas;
+	LoadTableResultCache table_request_cache;
+};
+
+} // namespace duckdb

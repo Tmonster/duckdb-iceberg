@@ -4,10 +4,10 @@
 #include "duckdb/parallel/meta_pipeline.hpp"
 #include "duckdb/parallel/pipeline.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
 #include "execution/operator/iceberg_written_files.hpp"
 #include "iceberg_logging.hpp"
 

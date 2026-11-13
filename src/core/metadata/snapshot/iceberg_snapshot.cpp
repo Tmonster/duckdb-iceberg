@@ -5,7 +5,7 @@
 #include "duckdb/common/operator/subtract.hpp"
 
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
 
 namespace duckdb {

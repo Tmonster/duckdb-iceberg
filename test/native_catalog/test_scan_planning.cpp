@@ -9,7 +9,7 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
 #include "planning/iceberg_multi_file_list.hpp"

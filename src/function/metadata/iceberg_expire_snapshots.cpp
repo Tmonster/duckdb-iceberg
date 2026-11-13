@@ -5,7 +5,7 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/planner/binder.hpp"
 
-#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/iceberg_catalog.hpp"
 #include "function/iceberg_functions.hpp"
 #include "maintenance/expire_snapshots_operator.hpp"
 #include "maintenance/expire_snapshots_planner.hpp"

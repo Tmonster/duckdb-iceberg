@@ -7,11 +7,11 @@
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 
-#include "catalog/rest/iceberg_table_set.hpp"
+#include "catalog/iceberg_table_set.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "core/expression/iceberg_value.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 
 #include <optional>
 

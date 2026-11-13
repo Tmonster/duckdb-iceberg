@@ -4,14 +4,19 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/logging/log_type.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/iceberg_rest_catalog.hpp"
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
 
 #include <condition_variable>
 #include <thread>
+
+// LoadTable revalidation (ETag / If-None-Match) is kept in the REST catalog: IcebergRestCatalog remembers the ETag of
+// each response and sends it only while that exact response is still the one in the load-table cache. The cache and
+// its publications carry no ETag, so these tests observe the validator through the If-None-Match header sent.
 
 using namespace duckdb;
 
@@ -50,8 +55,8 @@ struct LoadTableCacheTest {
 		return result;
 	}
 
-	IcebergCatalog &Catalog() {
-		return duckdb::Catalog::GetCatalog(*connection.context, Identifier("lake")).Cast<IcebergCatalog>();
+	IcebergRestCatalog &Catalog() {
+		return duckdb::Catalog::GetCatalog(*connection.context, Identifier("lake")).Cast<IcebergRestCatalog>();
 	}
 
 	LoadTableResultCache &Cache() {
@@ -73,13 +78,25 @@ struct LoadTableCacheTest {
 		REQUIRE(result->Collection().GetValue(0, 0).GetValue<int32_t>() == 204);
 	}
 
+	IcebergLoadTableResult Load() {
+		return IcebergLoadTableRequest({"default"}, "t").Execute(*connection.context, Catalog());
+	}
+
 	void Publish(const string &version, const string &etag) {
 		Respond(etag, 200, "{\"config\":{\"test-version\":\"" + version + "\"}}");
 		auto publication = Cache().BeginLoad(key);
-		auto result =
-		    IcebergLoadTableRequest({"default"}, "t", publication.get()).Execute(*connection.context, Catalog());
+		auto result = Load();
 		REQUIRE_FALSE(result.error_);
-		REQUIRE(publication->TryPublish(std::move(result.result_), std::move(result.etag)));
+		REQUIRE(publication->TryPublish(std::move(result.result_)));
+	}
+
+	//! The If-None-Match header a LoadTable for the current cache entry sends (a 304 keeps the entry).
+	Value NextValidator() {
+		Respond("\"unused\"", 200);
+		Query("CALL truncate_duckdb_logs()");
+		auto result = Load();
+		REQUIRE_FALSE(result.error_);
+		return LastValidator();
 	}
 
 	Value LastValidator() {
@@ -108,42 +125,45 @@ struct LoadTableCacheTest {
 
 } // namespace
 
-TEST_CASE("LoadTable revalidation retains its response when the cache is replaced", "[iceberg_cache]") {
+// With the ETag kept in the REST catalog, a load revalidates the response that is in the cache when it executes, not
+// the one cached when its publication began. A newer published response is revalidated with its own ETag, and a
+// replaced (SetOrOverwrite) entry has no ETag, so the load sends no If-None-Match and a 304 cannot revive the old
+// response. The superseded publication still cannot publish.
+TEST_CASE("LoadTable revalidation follows the response currently in the cache", "[iceberg_cache]") {
 	LoadTableCacheTest test;
 	auto publication = test.Cache().BeginLoad(test.key);
-	IcebergLoadTableRequest request({"default"}, "t", publication.get());
-	string expected_etag = "\"B\"";
 
 	SECTION("A newer load publishes first") {
 		test.Publish("new", "\"B\"");
+		test.Respond("\"B\"", 304);
+		test.Query("CALL truncate_duckdb_logs()");
+		auto result = test.Load();
+		REQUIRE(result.status_ == HTTPStatusCode::NotModified_304);
+		REQUIRE(result.result_->result.config->at("test-version") == "new");
+		REQUIRE(test.LastValidator().ToString() == "\"B\"");
+		REQUIRE_FALSE(publication->TryPublish(std::move(result.result_)));
 	}
 	SECTION("The scheduling owner is destroyed before execution") {
 		publication.reset();
 		test.Publish("new", "\"B\"");
+		test.Respond("\"B\"", 304);
+		test.Query("CALL truncate_duckdb_logs()");
+		auto result = test.Load();
+		REQUIRE(result.status_ == HTTPStatusCode::NotModified_304);
+		REQUIRE(result.result_->result.config->at("test-version") == "new");
+		REQUIRE(test.LastValidator().ToString() == "\"B\"");
 	}
 	SECTION("Authoritative publication clears the validator") {
-		auto replacement =
-		    make_shared_ptr<rest_api_objects::LoadTableResult>(publication->cached_result->result.Copy());
+		auto replacement = make_shared_ptr<rest_api_objects::LoadTableResult>(test.Cache().Peek(test.key)->result.Copy());
 		(*replacement->config)["test-version"] = "new";
 		test.Cache().SetOrOverwrite(test.key, make_shared_ptr<const IcebergLoadTableResponse>(std::move(*replacement)));
-		expected_etag.clear();
+		test.Respond("\"A\"", 304);
+		test.Query("CALL truncate_duckdb_logs()");
+		REQUIRE_THROWS_WITH(test.Load(), Catch::Contains("HTTP 304 without a cached response to revalidate"));
+		REQUIRE(test.LastValidator().IsNull());
+		REQUIRE_FALSE(publication->TryPublish(test.Cache().Peek(test.key)));
 	}
-
-	test.Respond("\"A\"", 304);
-	test.Query("CALL truncate_duckdb_logs()");
-	auto result = request.Execute(*test.connection.context, test.Catalog());
-	REQUIRE(result.status_ == HTTPStatusCode::NotModified_304);
-	REQUIRE(result.result_);
-	REQUIRE(result.result_->result.config->at("test-version") == "old");
-	REQUIRE(test.LastValidator().ToString() == "\"A\"");
-	if (publication) {
-		REQUIRE_FALSE(publication->TryPublish(std::move(result.result_), std::move(result.etag)));
-	}
-	auto current = test.Cache().BeginLoad(test.key);
-	REQUIRE(current->cached_result);
-	REQUIRE(current->cached_result->result.config->at("test-version") == "new");
-	// SetOrOverwrite has no HTTP validator; a fetched replacement carries its own.
-	REQUIRE(current->etag == expected_etag);
+	REQUIRE(test.Cache().Peek(test.key)->result.config->at("test-version") == "new");
 }
 
 TEST_CASE("Superseded LoadTable revalidations cannot publish after a newer load is abandoned", "[iceberg_cache]") {
@@ -151,40 +171,42 @@ TEST_CASE("Superseded LoadTable revalidations cannot publish after a newer load 
 	auto first = test.Cache().BeginLoad(test.key);
 	auto second = test.Cache().BeginLoad(test.key);
 	test.Respond("\"A\"", 304);
-	auto result =
-	    IcebergLoadTableRequest({"default"}, "t", first.get()).Execute(*test.connection.context, test.Catalog());
+	auto result = test.Load();
+	REQUIRE(result.status_ == HTTPStatusCode::NotModified_304);
 
 	SECTION("The newer load is still pending") {
-		REQUIRE_FALSE(first->TryPublish(result.result_, "\"stale\""));
-		REQUIRE(second->TryPublish(result.result_, "\"B\""));
-		auto current = test.Cache().BeginLoad(test.key);
-		REQUIRE(current->etag == "\"B\"");
+		REQUIRE_FALSE(first->TryPublish(result.result_));
+		REQUIRE(second->TryPublish(result.result_));
 	}
 	SECTION("The newer load is cancelled") {
 		second.reset();
-		REQUIRE_FALSE(first->TryPublish(result.result_, "\"stale\""));
+		REQUIRE_FALSE(first->TryPublish(result.result_));
 		auto current = test.Cache().BeginLoad(test.key);
-		REQUIRE(current->etag == "\"A\"");
-		REQUIRE(current->TryPublish(result.result_, "\"B\""));
+		REQUIRE(current->TryPublish(result.result_));
 	}
+	// The revalidated response is still the cached one, so its ETag stays usable.
+	REQUIRE(test.NextValidator().ToString() == "\"A\"");
 }
 
-TEST_CASE("An evicted LoadTable response stays alive for its request but cannot repopulate the cache",
-          "[iceberg_cache]") {
+// With the ETag kept in the REST catalog, an evicted entry has nothing to revalidate: the load sends no If-None-Match,
+// so a 304 cannot revive the evicted response, and the pre-eviction publication still cannot repopulate the cache.
+TEST_CASE("An evicted LoadTable response is not revalidated and cannot repopulate the cache", "[iceberg_cache]") {
 	LoadTableCacheTest test;
 	auto &table = test.Table();
 	auto publication = test.Cache().BeginLoad(test.key);
-	IcebergLoadTableRequest request({"default"}, "t", publication.get());
 	test.Cache().EvictIfCurrent(table);
+	REQUIRE_FALSE(test.Cache().Peek(test.key));
 
 	test.Respond("\"A\"", 304);
-	auto result = request.Execute(*test.connection.context, test.Catalog());
+	test.Query("CALL truncate_duckdb_logs()");
+	REQUIRE_THROWS_WITH(test.Load(), Catch::Contains("HTTP 304 without a cached response to revalidate"));
+	REQUIRE(test.LastValidator().IsNull());
+
+	test.Respond("\"B\"", 200, R"({"config":{"test-version":"after-eviction"}})");
+	auto result = test.Load();
 	REQUIRE(result.result_);
-	REQUIRE(result.result_->result.config->at("test-version") == "old");
-	REQUIRE_FALSE(publication->TryPublish(std::move(result.result_), std::move(result.etag)));
-	auto current = test.Cache().BeginLoad(test.key);
-	REQUIRE_FALSE(current->cached_result);
-	REQUIRE(current->etag.empty());
+	REQUIRE_FALSE(publication->TryPublish(std::move(result.result_)));
+	REQUIRE_FALSE(test.Cache().Peek(test.key));
 }
 
 TEST_CASE("LoadTable refresh revalidates metadata while credential refresh remains unconditional", "[iceberg_cache]") {
@@ -202,10 +224,11 @@ TEST_CASE("LoadTable refresh revalidates metadata while credential refresh remai
 	REQUIRE(table.GetMetadata().current_snapshot_id == snapshot_id);
 	REQUIRE(table.GetMetadataOwner() == parsed);
 	REQUIRE(test.LastValidator().ToString() == "\"A\"");
-	{
-		auto current = test.Cache().BeginLoad(test.key);
-		REQUIRE(current->etag == "\"B\"");
-	}
+	// The 304's ETag replaces the validator of the cached response.
+	test.Respond("\"B\"", 304);
+	test.Query("CALL truncate_duckdb_logs()");
+	table.RefreshFromCatalog(*test.connection.context);
+	REQUIRE(test.LastValidator().ToString() == "\"B\"");
 	auto prepared = table.GetVendedCredentials(*test.connection.context);
 	REQUIRE(prepared.config);
 	REQUIRE(prepared.config->provider == IcebergTableSecretProvider::Provider());
@@ -244,40 +267,44 @@ TEST_CASE("LoadTable refresh revalidates metadata while credential refresh remai
 TEST_CASE("Parsed LoadTable generations survive replacement and rejected publication", "[iceberg_cache]") {
 	LoadTableCacheTest test;
 	auto &table = test.Table();
-	auto first = test.Cache().BeginLoad(test.key);
-	auto response = first->cached_result;
+	auto response = test.Cache().Peek(test.key);
 	auto parsed = response->GetMetadata(*test.connection.context, table);
 	REQUIRE(parsed == table.GetMetadataOwner());
 	auto snapshot = parsed->GetLatestSnapshot();
 	REQUIRE(snapshot);
 
+	// A 304 retains the cached generation, and with it the parsed metadata.
+	auto first = test.Cache().BeginLoad(test.key);
 	test.Respond("\"rotated\"", 304);
-	auto unchanged =
-	    IcebergLoadTableRequest({"default"}, "t", first.get()).Execute(*test.connection.context, test.Catalog());
+	auto unchanged = test.Load();
 	REQUIRE(unchanged.result_ == response);
 	REQUIRE(unchanged.result_->GetMetadata(*test.connection.context, table) == parsed);
-	REQUIRE(first->TryPublish(unchanged.result_, unchanged.etag));
+	REQUIRE(first->TryPublish(unchanged.result_));
 	first.reset();
 
-	// A request owns A even if B publishes before its 304 completes.
+	// Revalidation is kept in the REST catalog, so a load revalidates the response that is cached when it runs (not
+	// the one cached when its publication began). A replaced or evicted generation is never revived, and a parsed
+	// generation that is still referenced stays intact.
 	auto late = test.Cache().BeginLoad(test.key);
-	IcebergLoadTableRequest request({"default"}, "t", late.get());
 	SECTION("A new 200 uses the same ETag but different metadata") {
 		test.Respond("\"rotated\"", 200, R"({"metadata":{"properties":{"owner-test":"new"}}})");
 		table.RefreshFromCatalog(*test.connection.context);
 		REQUIRE(table.GetMetadataOwner() != parsed);
 		REQUIRE(table.GetMetadata().GetTableProperty("owner-test") == "new");
+		auto current = test.Cache().Peek(test.key);
+		REQUIRE(current != response);
+		test.Respond("\"late\"", 304);
+		auto revalidated = test.Load();
+		REQUIRE(revalidated.result_ == current);
+		REQUIRE_FALSE(late->TryPublish(revalidated.result_));
 	}
 	SECTION("Eviction releases the cache while an old reader stays active") {
 		test.Cache().EvictIfCurrent(table);
-		auto empty = test.Cache().BeginLoad(test.key);
-		REQUIRE_FALSE(empty->cached_result);
+		REQUIRE_FALSE(test.Cache().Peek(test.key));
+		test.Respond("\"late\"", 304);
+		REQUIRE_THROWS_WITH(test.Load(), Catch::Contains("HTTP 304 without a cached response to revalidate"));
+		REQUIRE_FALSE(late->TryPublish(response));
 	}
-	test.Respond("\"late\"", 304);
-	auto old = request.Execute(*test.connection.context, test.Catalog());
-	REQUIRE(old.result_ == response);
-	REQUIRE(old.result_->GetMetadata(*test.connection.context, table) == parsed);
-	REQUIRE_FALSE(late->TryPublish(old.result_, old.etag));
 	REQUIRE(parsed->GetLatestSnapshot().get() == snapshot.get());
 	REQUIRE(parsed->GetTableProperty("owner-test").empty());
 }
@@ -295,7 +322,7 @@ TEST_CASE("Staleness reads and table copies share metadata until a writer detach
 	// The existing entry has no staleness expiry; republish it with a configured lifetime.
 	test.Catalog().attach_options.max_table_staleness_micros = 3600000000ULL;
 	auto publication = test.Cache().BeginLoad(test.key);
-	REQUIRE(publication->TryPublish(publication->cached_result, publication->etag));
+	REQUIRE(publication->TryPublish(test.Cache().Peek(test.key)));
 	auto reader = IcebergTable::CreatePlaceholder(test.Catalog(), table.schema, table.name);
 	REQUIRE(
 	    test.Cache().Get(*test.connection.context, test.key, [&](shared_ptr<const IcebergLoadTableResponse> response) {
@@ -421,8 +448,7 @@ TEST_CASE("Historical transaction metadata has its own owner outside the head ca
 	REQUIRE(reconstructed.GetMetadataOwner() != future_table.GetMetadataOwner());
 	REQUIRE(reconstructed.GetMetadata().GetTableProperty("owner-test") == "historical");
 	REQUIRE(future_table.GetMetadata().GetTableProperty("owner-test") == "future");
-	auto current = test.Cache().BeginLoad(test.key);
-	REQUIRE(current->cached_result->GetMetadata(*test.connection.context, table) == head);
+	REQUIRE(test.Cache().Peek(test.key)->GetMetadata(*test.connection.context, table) == head);
 }
 
 TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[iceberg_cache]") {
@@ -450,10 +476,10 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 
 				// Seed an old cached response whose SAS has expired, without a timing-dependent sleep.
 				respond(expired);
-				auto initial = IcebergLoadTableRequest({"default"}, "t").Execute(*test.connection.context, catalog);
-				REQUIRE_FALSE(initial.error_);
 				auto publication = test.Cache().BeginLoad(test.key);
-				REQUIRE(publication->TryPublish(initial.result_, initial.etag));
+				auto initial = test.Load();
+				REQUIRE_FALSE(initial.error_);
+				REQUIRE(publication->TryPublish(initial.result_));
 				IcebergTable old_table(catalog, schema, "t", initial.result_);
 				auto old_credentials = old_table.GetVendedCredentials(*test.connection.context);
 				auto &old_secret = scoped ? old_credentials.storage_credentials.at(0) : *old_credentials.config;
@@ -463,16 +489,13 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 				test.Respond("\"A\"", 304);
 				test.Query("CALL truncate_duckdb_logs()");
 				auto reload = test.Cache().BeginLoad(test.key);
-				REQUIRE_THROWS_WITH(
-				    IcebergLoadTableRequest({"default"}, "t", reload.get()).Execute(*test.connection.context, catalog),
-				    Catch::Contains("HTTP 304 without a cached response to revalidate"));
+				REQUIRE_THROWS_WITH(test.Load(), Catch::Contains("HTTP 304 without a cached response to revalidate"));
 				REQUIRE(test.LastValidator().IsNull());
 
 				// Identical metadata/ETag can carry a new SAS; always obtain the full response.
 				respond(fresh);
 				test.Query("CALL truncate_duckdb_logs()");
-				auto result =
-				    IcebergLoadTableRequest({"default"}, "t", reload.get()).Execute(*test.connection.context, catalog);
+				auto result = test.Load();
 				REQUIRE_FALSE(result.error_);
 				REQUIRE(result.status_ == HTTPStatusCode::OK_200);
 				REQUIRE(test.LastValidator().IsNull());
@@ -480,15 +503,13 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 				auto credentials = fresh_table.GetVendedCredentials(*test.connection.context);
 				auto &secret = scoped ? credentials.storage_credentials.at(0) : *credentials.config;
 				REQUIRE(StringUtil::Contains(secret.options.at("connection_string").ToString(), fresh));
-				REQUIRE(reload->TryPublish(result.result_, result.etag));
+				REQUIRE(reload->TryPublish(result.result_));
 
 				// With user-managed credentials, the Azure metadata remains safe to revalidate.
 				catalog.attach_options.access_mode = IRCAccessDelegationMode::NONE;
 				test.Respond("\"A\"", 304);
 				test.Query("CALL truncate_duckdb_logs()");
-				auto metadata_only = test.Cache().BeginLoad(test.key);
-				auto unchanged = IcebergLoadTableRequest({"default"}, "t", metadata_only.get())
-				                     .Execute(*test.connection.context, catalog);
+				auto unchanged = test.Load();
 				REQUIRE(unchanged.status_ == HTTPStatusCode::NotModified_304);
 				REQUIRE(unchanged.result_ == result.result_);
 				REQUIRE(test.LastValidator().ToString() == "\"A\"");
