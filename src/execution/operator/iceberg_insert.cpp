@@ -512,7 +512,13 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, const 
 	if (source_type == LogicalTypeId::TIMESTAMP_TZ_NS) {
 		target_type = LogicalType::TIMESTAMP_NS;
 	}
-	source = BoundCastExpression::AddDefaultCastToType(std::move(source), target_type);
+	if (source->GetReturnType() != target_type) {
+		// the built-in TIMESTAMPTZ -> TIMESTAMP cast keeps the UTC value, independent of the session time zone
+		CastFunctionSet default_casts;
+		auto get_input = GetCastFunctionInput::Default();
+		auto bound_cast = default_casts.GetCastFunction(source->GetReturnType(), target_type, get_input);
+		source = BoundCastExpression::CreateDefault(std::move(source), target_type, std::move(bound_cast));
+	}
 	if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
 		source = BoundCastExpression::Create(std::move(source), LogicalType::TIMESTAMP,
 		                                     BoundCastInfo(CastTimestampNsToTimestampFloor));
