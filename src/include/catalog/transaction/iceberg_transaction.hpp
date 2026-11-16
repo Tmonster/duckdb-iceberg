@@ -106,6 +106,10 @@ public:
 	IcebergTransactionAlterUpdate &GetOrCreateAlter();
 	IcebergTable &DeleteTable(IcebergTable &table);
 	IcebergTable &RenameTable(IcebergTable &table, const string &new_name);
+	//! Register a table the catalog created ahead of the commit (a REST create without stage-create). The catalog
+	//! drops it again in IcebergCatalog::AbortTransaction when the transaction does not commit.
+	void TableCreatedInCatalog(const string &table_key, const vector<string> &namespace_items, const string &name,
+	                           shared_ptr<const IcebergLoadTableResponse> created);
 
 public:
 	//! Set while a MERGE INTO is planned: its UPDATE and DELETE actions are governed by write.merge.mode, not by
@@ -125,6 +129,15 @@ private:
 	void EvictCachedTables();
 	//! Commit outcome unknown (5xx / no HTTP status); CleanupFiles() then keeps the written files.
 	bool commit_state_unknown = false;
+
+	struct CreatedTable {
+		string table_key;
+		vector<string> namespace_items;
+		string name;
+		//! The catalog's response to the create request
+		shared_ptr<const IcebergLoadTableResponse> created;
+	};
+	vector<CreatedTable> created_tables;
 
 private:
 	DatabaseInstance &db;

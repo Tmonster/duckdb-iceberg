@@ -25,6 +25,9 @@
 #include "catalog/transaction/iceberg_commit_staging.hpp"
 #include "catalog/transaction/iceberg_transaction.hpp"
 #include "catalog/transaction/iceberg_transaction_update.hpp"
+#include "catalog/iceberg_catalog_requests.hpp"
+#include "duckdb/common/enum_util.hpp"
+#include "iceberg_logging.hpp"
 #include "rest_catalog/objects/list.hpp"
 
 namespace duckdb {
@@ -121,6 +124,65 @@ bool CommitStateUnknown(const ErrorData &error) {
 
 } // namespace
 
+//! Whether the catalog still holds the table version that the create request returned.
+static bool IsCreatedVersion(const rest_api_objects::LoadTableResult &current,
+                             const rest_api_objects::LoadTableResult &created) {
+	if (!current.metadata_location || !created.metadata_location) {
+		//! Without a metadata location, a commit by another transaction cannot be ruled out.
+		return false;
+	}
+	if (*current.metadata_location != *created.metadata_location) {
+		return false;
+	}
+	return current.metadata.table_uuid == created.metadata.table_uuid;
+}
+
+void IcebergRestTransactionCommit::DropCreatedTables() {
+	auto &created_tables = transaction.created_tables;
+	if (created_tables.empty()) {
+		return;
+	}
+	if (transaction.commit_state_unknown) {
+		// Commit may have landed (CommitStateUnknownException); keep the tables.
+		return;
+	}
+	Connection temp_con(db);
+	temp_con.BeginTransaction();
+	auto &temp_context = *temp_con.context;
+	for (auto &table : created_tables) {
+		auto state = transaction.GetLatestTableState(table.table_key);
+		if (state && state->IsAlive()) {
+			catalog.table_request_cache.EvictIfCurrent(state->GetInfo());
+		}
+		auto table_name = IcebergLogType::Redact(temp_context, table.table_key);
+		try {
+			//! The table has been visible to other transactions since it was created, so it is dropped only while
+			//! the catalog still holds the version that the create request returned.
+			auto current = IcebergLoadTableRequest(table.namespace_items, table.name).Execute(temp_context, catalog);
+			if (current.error_) {
+				DUCKDB_LOG(temp_context, IcebergLogType,
+				           "Iceberg Transaction Cleanup, did not drop table '%s': loading it returned %s", table_name,
+				           EnumUtil::ToString(current.status_));
+				continue;
+			}
+			if (!IsCreatedVersion(current.result_->result, table.created->result)) {
+				DUCKDB_LOG(temp_context, IcebergLogType,
+				           "Iceberg Transaction Cleanup, did not drop table '%s': the catalog does not report the "
+				           "version this transaction created",
+				           table_name);
+				continue;
+			}
+			IRCAPI::CommitTableDelete(temp_context, catalog, table.namespace_items, table.name);
+			DUCKDB_LOG(temp_context, IcebergLogType, "Iceberg Transaction Cleanup, dropped table '%s'", table_name);
+		} catch (std::exception &ex) {
+			DUCKDB_LOG(temp_context, IcebergLogType, "Iceberg Transaction Cleanup, failed to drop table '%s': %s",
+			           table_name, ex.what());
+		}
+	}
+	created_tables.clear();
+	temp_con.Rollback();
+}
+
 void IcebergRestTransactionCommit::Commit() {
 	// Views use individual REST endpoints, not the atomic table commit endpoint. Validate
 	// the entire write set before any schema, table, or view request can reach the catalog.
@@ -128,6 +190,7 @@ void IcebergRestTransactionCommit::Commit() {
 	if (view_operations && (view_operations > 1 || transaction.HasTableUpdate() || !transaction.created_schemas.Empty() ||
 	                        !transaction.deleted_schemas.empty() || !transaction.schema_property_updates.empty())) {
 		transaction.CleanupFiles();
+		DropCreatedTables();
 		throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
 		                           "changes; commit each view create or drop separately");
 	}
@@ -165,6 +228,7 @@ void IcebergRestTransactionCommit::Commit() {
 		ErrorData error(ex);
 		transaction.commit_state_unknown = CommitStateUnknown(error);
 		transaction.CleanupFiles();
+		DropCreatedTables();
 		temp_con.Rollback();
 		transaction.EvictCachedTables();
 		error.Throw("Failed to commit Iceberg transaction: ");

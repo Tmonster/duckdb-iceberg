@@ -262,6 +262,10 @@ public:
 	//===--------------------------------------------------------------------===//
 	//! Publish all changes buffered by 'transaction'. Only called for transactions that changed something.
 	virtual void Commit(IcebergTransaction &transaction) = 0;
+	//! Undo what the catalog did ahead of the commit for a transaction that does not commit: on ROLLBACK, and
+	//! from Commit when it fails. Catalogs that publish nothing before the commit have nothing to undo.
+	virtual void AbortTransaction(IcebergTransaction &transaction) {
+	}
 
 protected:
 	//! Register a table created by the current transaction
