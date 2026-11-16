@@ -18,6 +18,9 @@ public:
 
 public:
 	void Commit();
+	//! Drop the tables the catalog created ahead of the commit (IcebergTransaction::TableCreatedInCatalog), when
+	//! the transaction does not commit
+	void DropCreatedTables();
 
 private:
 	void DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);

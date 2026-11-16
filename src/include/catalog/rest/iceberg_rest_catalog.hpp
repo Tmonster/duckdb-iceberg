@@ -49,6 +49,7 @@ public:
 	void VerifyDropSchema(const DropInfo &info) const override;
 	void VerifyTableUpdates(const IcebergTransactionAlterUpdate &alter_update) const override;
 	void Commit(IcebergTransaction &transaction) override;
+	void AbortTransaction(IcebergTransaction &transaction) override;
 
 public:
 	//! Whether the server supports atomic multi-table commits, and they are not disabled

@@ -280,8 +280,14 @@ void IcebergTransaction::EvictCachedTables() {
 	    transaction_update);
 }
 
+void IcebergTransaction::TableCreatedInCatalog(const string &table_key, const vector<string> &namespace_items,
+                                               const string &name, shared_ptr<const IcebergLoadTableResponse> created) {
+	created_tables.push_back({table_key, namespace_items, name, std::move(created)});
+}
+
 void IcebergTransaction::Rollback() {
 	CleanupFiles();
+	catalog.AbortTransaction(*this);
 }
 
 IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
