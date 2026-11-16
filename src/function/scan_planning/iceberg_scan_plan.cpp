@@ -1,7 +1,7 @@
 #include "function/iceberg_functions.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/partition/iceberg_partition_constants.hpp"
 #include "duckdb/common/types/vector.hpp"

@@ -3,7 +3,7 @@
 #include "duckdb/common/types/value.hpp"
 
 #include "catalog/rest/api/api_utils.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/iceberg_catalog.hpp"
 
 namespace duckdb {
 

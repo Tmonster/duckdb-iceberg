@@ -4,10 +4,10 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/logging/log_type.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
 
 #include <condition_variable>

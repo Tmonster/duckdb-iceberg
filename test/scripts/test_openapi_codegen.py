@@ -162,7 +162,7 @@ def test_inherited_const_and_array_valued_map_are_generated():
     assert 'obj.Add("snapshot-id", writer.CreateNull())' in nullable_source
     assert nullable_source.count('obj.Add("snapshot-id", writer.CreateNull())') == 1
 
-    transaction_source = (REPO_ROOT / "src/catalog/rest/transaction/iceberg_transaction.cpp").read_text()
+    transaction_source = (REPO_ROOT / "src/catalog/transaction/iceberg_transaction.cpp").read_text()
     assert "AddExplicitNullSnapshotIds" not in transaction_source
 
 

@@ -11,7 +11,7 @@
 #include "iceberg_extension.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/iceberg_catalog.hpp"
 #include "catalog/rest/api/api_utils.hpp"
 
 #include "rest_catalog/objects/oauth_token_response.hpp"

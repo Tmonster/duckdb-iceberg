@@ -10,7 +10,7 @@
 
 #include "execution/operator/iceberg_insert.hpp"
 #include "execution/operator/iceberg_written_files.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
+#include "catalog/transaction/iceberg_transaction_metadata.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 
 namespace duckdb {

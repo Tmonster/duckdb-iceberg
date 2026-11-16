@@ -1,5 +1,5 @@
 #include "iceberg_attach.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/iceberg_catalog.hpp"
 
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"

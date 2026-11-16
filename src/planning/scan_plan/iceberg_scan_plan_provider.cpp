@@ -2,8 +2,8 @@
 
 #include "catalog/rest/api/iceberg_expression.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/iceberg_catalog.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
