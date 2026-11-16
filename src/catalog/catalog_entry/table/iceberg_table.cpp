@@ -24,7 +24,7 @@
 #include "catalog/transaction/iceberg_transaction.hpp"
 #include "catalog/transaction/iceberg_transaction_data.hpp"
 #include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_catalog.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
@@ -263,8 +263,12 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator);
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
 	case_insensitive_map_t<Value> user_defaults;
-	if (catalog.auth_handler->type == IcebergAuthorizationType::SIGV4) {
-		auto &sigv4_auth = catalog.auth_handler->Cast<SIGV4Authorization>();
+	optional_ptr<IcebergRestCatalog> rest_catalog;
+	if (catalog.GetIcebergCatalogType() == IcebergCatalogType::REST) {
+		rest_catalog = catalog.Cast<IcebergRestCatalog>();
+	}
+	if (rest_catalog && rest_catalog->auth_handler->type == IcebergAuthorizationType::SIGV4) {
+		auto &sigv4_auth = rest_catalog->auth_handler->Cast<SIGV4Authorization>();
 		auto catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
 		// start with the credentials needed for the catalog and overwrite information contained
 		// in the vended credentials. We do it this way to maintain the region info from the catalog credentials
@@ -783,8 +787,12 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	                 IcebergLogType::Redact(context, info.name.GetIdentifierName()),
 	                 IcebergLogType::Redact(context, info.scope), scope_source);
 
-	if (StringUtil::StartsWith(catalog.base_uri, "glue")) {
-		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
+	optional_ptr<IcebergRestCatalog> rest_catalog;
+	if (catalog.GetIcebergCatalogType() == IcebergCatalogType::REST) {
+		rest_catalog = catalog.Cast<IcebergRestCatalog>();
+	}
+	if (rest_catalog && StringUtil::StartsWith(rest_catalog->base_uri, "glue")) {
+		auto &sigv4 = rest_catalog->auth_handler->Cast<SIGV4Authorization>();
 		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
 		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 
@@ -792,8 +800,8 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 		auto region = kv_secret.TryGetValue("region").ToString();
 		auto endpoint = "s3." + region + ".amazonaws.com";
 		info.options["endpoint"] = endpoint;
-	} else if (StringUtil::StartsWith(catalog.base_uri, "s3tables")) {
-		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
+	} else if (rest_catalog && StringUtil::StartsWith(rest_catalog->base_uri, "s3tables")) {
+		auto &sigv4 = rest_catalog->auth_handler->Cast<SIGV4Authorization>();
 		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
 		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
 
@@ -867,7 +875,7 @@ bool IcebergTable::HasTransactionUpdates() const {
 
 void IcebergTable::RefreshFromCatalog(ClientContext &context) {
 	auto publication = catalog.table_request_cache.BeginLoad(GetTableKey());
-	ApplyRefreshResult(context, IRCAPI::GetTable(context, catalog, schema, name, publication.get()), *publication);
+	ApplyRefreshResult(context, catalog.LoadTable(context, schema.namespace_items, name), *publication);
 }
 
 void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult get_table_result,
@@ -882,7 +890,7 @@ void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableRe
 	dummy_entry.reset();
 	InitializeFromCatalogResponse(context, load_table_result);
 	initialization_source = nullptr;
-	if (publication.TryPublish(std::move(get_table_result.result_), std::move(get_table_result.etag))) {
+	if (publication.TryPublish(std::move(get_table_result.result_))) {
 		initialization_source = load_table_result;
 	}
 }

@@ -76,6 +76,7 @@ class IcebergTransaction : public Transaction {
 public:
 	friend struct IcebergTransactionData;
 	friend struct IcebergTransactionAlterUpdate;
+	friend class IcebergRestTransactionCommit;
 
 	IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context);
 	~IcebergTransaction() override;
@@ -88,21 +89,13 @@ public:
 	AccessMode GetAccessMode() const {
 		return access_mode;
 	}
-	void DoTableUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
-	void DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context);
-	void DoTableRename(IcebergTransactionRenameUpdate &rename_update, ClientContext &context);
-	void DoSchemaCreates(ClientContext &context);
-	void DoSchemaDeletes(ClientContext &context);
-	void DoSchemaPropertyUpdates(ClientContext &context);
-	void DoViewCreates(ClientContext &context);
-	void DoViewDeletes(ClientContext &context);
+	//! Whether this transaction buffered any change that has to be published at commit
+	bool HasChanges() const;
 	void InvalidateViewEntry(const string &view_key);
 	IcebergCatalog &GetCatalog();
 	//! LoadTable requests scheduled ahead of binding for the tables a query references, created on first use
 	IcebergTablePrefetch &GetTablePrefetch(ClientContext &context);
 	optional_ptr<IcebergTablePrefetch> TryGetTablePrefetch();
-	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
-	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
 	IcebergTransactionTableState &SetCatalogTableState(shared_ptr<IcebergTable> table);
 	IcebergTransactionTableState &SetTransactionTableState(const string &table_key, IcebergTable &&table,
@@ -113,8 +106,8 @@ public:
 	IcebergTransactionAlterUpdate &GetOrCreateAlter();
 	IcebergTable &DeleteTable(IcebergTable &table);
 	IcebergTable &RenameTable(IcebergTable &table, const string &new_name);
-	bool MultiTableCommitAvailable() const;
-	//! Register a table the catalog created without stage-create, which exists there ahead of the commit.
+	//! Register a table the catalog created ahead of the commit (a REST create without stage-create). The catalog
+	//! drops it again in IcebergCatalog::AbortTransaction when the transaction does not commit.
 	void TableCreatedInCatalog(const string &table_key, const vector<string> &namespace_items, const string &name,
 	                           shared_ptr<const IcebergLoadTableResponse> created);
 
@@ -127,14 +120,10 @@ private:
 	bool HasTableUpdate() const;
 	IcebergTransactionAlterUpdate *GetAlterUpdate();
 	const IcebergTransactionAlterUpdate *GetAlterUpdate() const;
-	bool CanUseMultiTableCommit(const IcebergTransactionAlterUpdate &alter_update) const;
-	void VerifyAlterUpdateAtomicity(const IcebergTransactionAlterUpdate &alter_update) const;
 	void CleanupMetadataFiles(ClientContext &context, const vector<string> &paths);
 	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, const unordered_set<string> &table_keys,
 	                        ClientContext &context);
 	void CleanupFiles();
-	//! Drop the tables registered through TableCreatedInCatalog, when the transaction does not commit.
-	void DropCreatedTables();
 	//! Evict the touched tables' cached LoadTableResult so a retry after a failed commit (e.g. a 409
 	//! conflict) doesn't keep reusing the same stale metadata.
 	void EvictCachedTables();
