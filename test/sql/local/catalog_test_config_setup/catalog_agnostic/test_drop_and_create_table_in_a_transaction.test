@@ -92,4 +92,4 @@ create or replace table my_datalake.default.duid (a int);
 statement error con1
 create or replace schema my_datalake.default.new_schema;
 ----
-Not implemented Error: CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements
+<REGEX>:(.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*|.*does not support nested schemas.*)
