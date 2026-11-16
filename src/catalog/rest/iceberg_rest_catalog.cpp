@@ -102,11 +102,17 @@ IcebergTable &IcebergRestCatalog::CreateTable(ClientContext &context, IcebergSch
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
 	auto new_table_result = make_shared_ptr<const IcebergLoadTableResponse>(
 	    IRCAPI::CommitNewTable(context, *this, schema.namespace_items, request));
+	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
+	if (!attach_options.stage_create_tables) {
+		// Without stage-create the table now exists in the catalog ahead of the commit. Register it before anything
+		// else can refuse the statement, so that the rollback drops it again.
+		auto key = IcebergTable::GetTableKey(*this, schema.namespace_items, request.GetName());
+		iceberg_transaction.TableCreatedInCatalog(key, schema.namespace_items, request.GetName(), new_table_result);
+	}
 	auto &table_info = AddCreatedTable(context, IcebergTable(*this, schema, request.GetName(), new_table_result));
 	table_request_cache.SetOrOverwrite(table_info.GetTableKey(), std::move(new_table_result));
 
 	// if we stage created the table, we add an assert create
-	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
 	auto &transaction_data = table_info.GetOrCreateTransactionData(iceberg_transaction);
 	if (attach_options.stage_create_tables) {
 		transaction_data.TableAddAssertCreate();
@@ -163,6 +169,10 @@ bool IcebergRestCatalog::MultiTableCommitAvailable() const {
 
 void IcebergRestCatalog::Commit(IcebergTransaction &transaction) {
 	IcebergRestTransactionCommit(*this, transaction).Commit();
+}
+
+void IcebergRestCatalog::AbortTransaction(IcebergTransaction &transaction) {
+	IcebergRestTransactionCommit(*this, transaction).DropCreatedTables();
 }
 
 //===--------------------------------------------------------------------===//
