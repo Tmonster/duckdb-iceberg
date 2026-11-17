@@ -727,8 +727,6 @@ void IcebergTable::LoadCredentials(ClientContext &context) const {
 }
 
 void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
-	auto &secret_manager = SecretManager::Get(context);
-
 	auto &transaction = IcebergTransaction::Get(context, catalog);
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
@@ -745,7 +743,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 			if (http_secret_entry) {
 				IcebergTableSecretProvider::AddHTTPSecretsToOptions(*http_secret_entry, info.options);
 			}
-			(void)secret_manager.CreateSecret(context, info);
+			IcebergTableSecretProvider::StoreVendedSecret(context, info);
 		}
 		return;
 	}
@@ -824,7 +822,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 		IcebergTableSecretProvider::AddHTTPSecretsToOptions(*http_secret_entry, info.options);
 	}
 
-	(void)secret_manager.CreateSecret(context, info);
+	IcebergTableSecretProvider::StoreVendedSecret(context, info);
 	// if there is no key_id, secret, token (S3/GCS) or account_name, connection_string (Azure) in the info,
 	// log that vended credentials has not worked
 	bool has_s3_creds = info.options.find("key_id") != info.options.end() ||

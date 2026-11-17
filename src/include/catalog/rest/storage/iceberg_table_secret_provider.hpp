@@ -26,6 +26,12 @@ public:
 	static unique_ptr<SecretEntry> GetHTTPSecretForCatalog(ClientContext &context, IcebergCatalog &catalog);
 	static Value MakeRefreshInfo(const string &catalog_name, const string &schema_name, const string &table_name);
 	static unique_ptr<BaseSecret> CreateSecret(ClientContext &context, CreateSecretInput &input);
+	//! Stores the secret of one vended credential. A credential of a storage type the Iceberg provider supports is
+	//! built by that provider and registered: the provider only arranges what the catalog returned, and
+	//! SecretManager::CreateSecret is refused when enable_external_access is false, which would fail every read of a
+	//! table whose catalog vends credentials. Any other credential is built by the provider of another extension,
+	//! through the secret manager.
+	static void StoreVendedSecret(ClientContext &context, CreateSecretInput &info);
 };
 
 } // namespace duckdb
