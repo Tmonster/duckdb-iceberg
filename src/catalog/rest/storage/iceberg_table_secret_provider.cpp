@@ -260,6 +260,21 @@ bool IcebergTableSecretProvider::SupportsStorageType(const string &storage_type)
 	       StringUtil::CIEquals(storage_type, "r2");
 }
 
+void IcebergTableSecretProvider::StoreVendedSecret(ClientContext &context, CreateSecretInput &info) {
+	auto &secret_manager = SecretManager::Get(context);
+	if (info.provider != Identifier(Provider())) {
+		(void)secret_manager.CreateSecret(context, info);
+		return;
+	}
+	auto secret = CreateSecret(context, info);
+	if (!secret) {
+		throw InternalException("The Iceberg secret provider did not return a secret for type: %s", info.type);
+	}
+	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
+	(void)secret_manager.RegisterSecret(transaction, std::move(secret), info.on_conflict, info.persist_type,
+	                                    info.storage_type.GetIdentifierName());
+}
+
 unique_ptr<BaseSecret> IcebergTableSecretProvider::CreateSecret(ClientContext &context, CreateSecretInput &input) {
 	if (input.options.find("catalog_name") != input.options.end()) {
 		DUCKDB_LOG_INFO(context, "Refreshing Iceberg vended credentials for secret '%s'",
