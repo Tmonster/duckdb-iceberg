@@ -80,6 +80,34 @@ ATTACH 's3://bucket/warehouse' AS lake (
   removes the table's files if they are inside the warehouse.
 - Views are not supported yet.
 
+## AWS Glue catalogs
+
+`CATALOG_TYPE 'glue'` attaches the AWS Glue Data Catalog through the Glue API, like `GlueCatalog` of Iceberg Java
+(rather than through Glue's Iceberg REST endpoint, which `ENDPOINT_TYPE 'glue'` uses). DuckDB writes the table
+metadata files itself, and Glue stores a pointer to each table's current metadata file.
+
+```sql
+CREATE SECRET (TYPE s3, PROVIDER credential_chain);
+ATTACH ':' AS glue (
+    TYPE ICEBERG,
+    CATALOG_TYPE 'glue',
+    REGION 'eu-west-1',
+    DEFAULT_LOCATION 's3://bucket/warehouse'
+);
+```
+
+- The ATTACH path is the Glue catalog id: `:` for the default catalog of the account, or e.g. `123456789012`.
+- `REGION` defaults to the secret's region, `SECRET` names the S3/AWS secret to sign requests with, and
+  `ENDPOINT` overrides the Glue endpoint (e.g. for moto).
+- A Glue database is a schema; Glue has no nested namespaces. Only tables with the parameter
+  `table_type = ICEBERG` are listed.
+- New tables are created at `<database LocationUri>/<table>`, else at `<DEFAULT_LOCATION>/<database>.db/<table>`.
+  The `location` and `comment` schema properties are the database's `LocationUri` and `Description`.
+- Commits swap the table's `metadata_location` parameter with `UpdateTable`, passing the table's `VersionId` so
+  that Glue rejects a concurrent change. Glue has no transactions, so a transaction can change only one table.
+- Renaming a table creates the new table and drops the old one. A schema can only be dropped when it is empty.
+- Views are not supported.
+
 ## Development setup
 
 Clone the repository with its DuckDB and extension tooling submodules:
@@ -173,6 +201,14 @@ make sql-postgres-stop
 
 `make test_sql_catalog_python_release` checks that DuckDB and PyIceberg can share a SQL catalog; it needs
 `pyiceberg[sql-sqlite,pyarrow]`.
+
+The Glue suite runs the catalog-agnostic tests against [moto](https://github.com/getmoto/moto), a local
+implementation of the Glue API, installed into `.venv-glue-moto` (no Docker). Each test attaches with its own
+region, which moto keeps apart, so every test starts with an empty catalog:
+
+```shell
+make test_glue_catalog_release
+```
 
 Use `T` to narrow a Make-based run, or invoke the sqllogictest runner directly:
 

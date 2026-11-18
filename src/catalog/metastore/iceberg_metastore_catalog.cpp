@@ -1,6 +1,7 @@
 #include "catalog/metastore/iceberg_metastore_catalog.hpp"
 
 #include "duckdb/common/enums/http_status_code.hpp"
+#include "duckdb/common/exception/transaction_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/uuid.hpp"
 
@@ -119,16 +120,10 @@ string IcebergMetastoreCatalog::PurgeLocation(const IcebergTable &table) const {
 }
 
 void IcebergMetastoreCatalog::VerifySingleTableUpdate(const IcebergTransactionAlterUpdate &alter_update) const {
-	idx_t updated_tables = 0;
-	for (auto &entry : alter_update.updated_tables) {
-		if (entry.second.get().HasTransactionUpdates()) {
-			updated_tables++;
-		}
-	}
-	if (updated_tables > 1) {
-		throw NotImplementedException("An Iceberg %s can't commit changes to several tables atomically: change one "
-		                              "table per transaction",
-		                              MetastoreName());
+	if (alter_update.updated_tables.size() > 1) {
+		throw TransactionException("Iceberg %s cannot commit this transaction atomically because it would change "
+		                           "multiple tables, and every table is committed separately",
+		                           MetastoreName());
 	}
 }
 
