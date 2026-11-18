@@ -27,6 +27,10 @@ public:
 	static string WriteMetadataFile(ClientContext &context, IcebergTableMetadata &metadata,
 	                                optional_ptr<const IcebergTableMetadata> previous,
 	                                const string &previous_metadata_location, const string &metadata_directory);
+	//! Record 'previous' (nullptr for a new table), stored in 'previous_metadata_location', in the metadata-log of
+	//! 'metadata', and drop the entries beyond 'write.metadata.previous-versions-max'
+	static void RecordPreviousMetadata(IcebergTableMetadata &metadata, optional_ptr<const IcebergTableMetadata> previous,
+	                                   const string &previous_metadata_location);
 	//! The version of a metadata file named '<version>-<uuid>.metadata.json' or 'v<version>.metadata.json',
 	//! or 0 if the name has neither format
 	static idx_t ParseMetadataVersion(const string &metadata_location);

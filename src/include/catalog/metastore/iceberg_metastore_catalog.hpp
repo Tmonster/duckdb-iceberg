@@ -104,6 +104,9 @@ public:
 public:
 	IcebergLoadTableResult LoadTable(ClientContext &context, const vector<string> &namespace_items,
 	                                 const string &table_name) override;
+	//! Views are entries of type VIEW, pointing at a view metadata file
+	IcebergLoadViewResult LoadView(ClientContext &context, const vector<string> &namespace_items,
+	                               const string &view_name) override;
 	IcebergTable &CreateTable(ClientContext &context, IcebergSchemaEntry &schema,
 	                          const IcebergCreateTableRequest &request) override;
 	void Commit(IcebergTransaction &transaction) override;

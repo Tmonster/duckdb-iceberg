@@ -9,7 +9,7 @@ on:
 
 jobs:
   test-sql-catalog:
-    name: Test SQL catalog in DuckDB and SQLite databases
+    name: Test SQL catalog in DuckDB and SQLite databases, and the filesystem catalog
     runs-on: ubuntu-latest
     env:
       ASAN_SYMBOLIZER_PATH: /usr/bin/llvm-symbolizer
@@ -44,6 +44,9 @@ jobs:
 
       - name: Run SQL catalog tests (SQLite)
         run: make test_sql_catalog_sqlite_relassert
+
+      - name: Run filesystem catalog tests
+        run: make test_filesystem_catalog_relassert
 
       - name: Run PyIceberg interoperability tests
         run: |

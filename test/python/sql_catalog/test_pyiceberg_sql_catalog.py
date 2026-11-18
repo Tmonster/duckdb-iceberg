@@ -85,7 +85,7 @@ def test_duckdb_and_pyiceberg_share_a_sql_catalog(unittest_binary, print_unittes
     }
 
 
-def test_pyiceberg_sees_duckdb_renames_and_drops(unittest_binary, print_unittest_stdin, shared_catalog):
+def test_pyiceberg_sees_duckdb_renames_drops_and_views(unittest_binary, print_unittest_stdin, shared_catalog):
     database, warehouse = shared_catalog
 
     with DuckDBUnittestRunner(unittest_binary, test_config=SQL_SQLITE_CONFIG, print_stdin=print_unittest_stdin) as test:
@@ -95,7 +95,13 @@ def test_pyiceberg_sees_duckdb_renames_and_drops(unittest_binary, print_unittest
         test.statement_ok(f"CREATE TABLE {CATALOG_NAME}.ns.dropped_by_duckdb AS SELECT 2 AS i")
         test.statement_ok(f"ALTER TABLE {CATALOG_NAME}.ns.renamed_by_duckdb RENAME TO renamed")
         test.statement_ok(f"DROP TABLE {CATALOG_NAME}.ns.dropped_by_duckdb")
+        test.statement_ok(f"CREATE VIEW {CATALOG_NAME}.ns.view_by_duckdb AS SELECT 3 AS i")
 
+    # The view is stored as a 'VIEW' row, as the JDBC catalog does. PyIceberg filters those from its table listing
+    # since apache/iceberg-python#3709; older versions list views as tables.
     catalog = pyiceberg_catalog(database, warehouse)
-    assert catalog.list_tables("ns") == [("ns", "renamed")]
+    expected_tables = [("ns", "renamed")]
+    if not hasattr(sql_catalog.SqlCatalog, "_iceberg_type_filter"):
+        expected_tables.append(("ns", "view_by_duckdb"))
+    assert sorted(catalog.list_tables("ns")) == expected_tables
     assert catalog.load_table("ns.renamed").scan().to_arrow().to_pydict() == {"i": [1]}

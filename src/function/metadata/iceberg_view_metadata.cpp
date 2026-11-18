@@ -23,11 +23,11 @@ namespace duckdb {
 //! LoadView REST call, mirroring `iceberg_load_table_response` for tables. Useful for discovering
 //! views on a REST catalog, including views written in a SQL dialect DuckDB can't parse.
 struct IcebergViewMetadataBindData : public TableFunctionData {
-	IcebergRestCatalog &ic_catalog;
+	IcebergCatalog &ic_catalog;
 	IcebergSchemaEntry &ic_schema;
 	string view_name;
 
-	IcebergViewMetadataBindData(IcebergRestCatalog &ic_catalog, IcebergSchemaEntry &ic_schema, string view_name)
+	IcebergViewMetadataBindData(IcebergCatalog &ic_catalog, IcebergSchemaEntry &ic_schema, string view_name)
 	    : ic_catalog(ic_catalog), ic_schema(ic_schema), view_name(std::move(view_name)) {
 	}
 };
@@ -41,7 +41,7 @@ struct IcebergViewMetadataGlobalState : public GlobalTableFunctionState {
 };
 
 static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const IcebergViewMetadataBindData &bind_data) {
-	auto &ic_catalog = bind_data.ic_catalog;
+	auto &ic_catalog = bind_data.ic_catalog.Cast<IcebergRestCatalog>();
 	auto &ic_schema = bind_data.ic_schema;
 
 	auto url_builder = ic_catalog.GetBaseUrl();
@@ -62,6 +62,32 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const Iceber
 	return response;
 }
 
+struct IcebergViewMetadataResponse {
+	string body;
+	//! The REST request the response was returned for, unset for other catalog types
+	optional<string> url;
+};
+
+static IcebergViewMetadataResponse LoadResponse(ClientContext &context, const IcebergViewMetadataBindData &bind_data) {
+	IcebergViewMetadataResponse result;
+	if (bind_data.ic_catalog.GetIcebergCatalogType() == IcebergCatalogType::REST) {
+		// The response exactly as the server returned it
+		auto response = MakeRequest(context, bind_data);
+		result.body = response->body;
+		result.url = response->url;
+		return result;
+	}
+	auto load_result =
+	    bind_data.ic_catalog.LoadView(context, bind_data.ic_schema.namespace_items, bind_data.view_name);
+	if (load_result.error_) {
+		throw IOException("Could not load view '%s': %s", bind_data.view_name, load_result.error_->_error.message);
+	}
+	JSONWriter writer;
+	writer.SetRoot(load_result.result_->ToJSON(writer));
+	result.body = writer.ToString();
+	return result;
+}
+
 static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, TableFunctionBindInput &input,
                                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto input_string = input.inputs[0].ToString();
@@ -77,11 +103,7 @@ static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, 
 		throw InvalidInputException("View '%s' is not in an Iceberg REST catalog", input_string);
 	}
 
-	auto &iceberg_catalog = view_catalog.Cast<IcebergCatalog>();
-	if (iceberg_catalog.GetIcebergCatalogType() != IcebergCatalogType::REST) {
-		throw InvalidInputException("View '%s' is not in an Iceberg REST catalog", input_string);
-	}
-	auto &ic_catalog = iceberg_catalog.Cast<IcebergRestCatalog>();
+	auto &ic_catalog = view_catalog.Cast<IcebergCatalog>();
 	auto &ic_schema = view_entry.schema.Cast<IcebergSchemaEntry>();
 
 	auto ret = make_uniq<IcebergViewMetadataBindData>(ic_catalog, ic_schema, view_entry.name.GetIdentifierName());
@@ -133,10 +155,10 @@ static void IcebergViewMetadataFunction(ClientContext &context, TableFunctionInp
 	}
 	global_state.done = true;
 
-	auto response = MakeRequest(context, bind_data);
+	auto response = LoadResponse(context, bind_data);
 
 	// Parse the response as JSON
-	auto doc = ICUtils::APIResultToDoc(response->body);
+	auto doc = ICUtils::APIResultToDoc(response.body);
 	auto root = doc->GetRoot();
 
 	auto load_result = rest_api_objects::LoadViewResult::FromJSON(root);
@@ -170,8 +192,12 @@ static void IcebergViewMetadataFunction(ClientContext &context, TableFunctionInp
 
 	// request_url
 	auto &request_endpoint_vector = output.data[3];
-	FlatVector::GetDataMutable<string_t>(request_endpoint_vector)[0] =
-	    StringVector::AddString(request_endpoint_vector, response->url);
+	if (response.url) {
+		FlatVector::GetDataMutable<string_t>(request_endpoint_vector)[0] =
+		    StringVector::AddString(request_endpoint_vector, *response.url);
+	} else {
+		FlatVector::ValidityMutable(request_endpoint_vector).SetInvalid(0);
+	}
 }
 
 TableFunctionSet IcebergFunctions::GetIcebergViewMetadataFunction() {

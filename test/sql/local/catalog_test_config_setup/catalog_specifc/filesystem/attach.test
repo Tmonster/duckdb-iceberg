@@ -1,0 +1,60 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/filesystem/attach.test
+# description: ATTACH options of the Iceberg filesystem catalog, and catalogs persisting across attaches
+# group: [filesystem]
+
+require-env CATALOG_TEST_CONFIG_SETUP filesystem
+
+include test/sql/init_requires
+
+statement error
+ATTACH '' AS no_warehouse (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+----
+An Iceberg filesystem catalog needs a warehouse
+
+# There is no catalog service to connect to
+statement error
+ATTACH '{TEST_DIR}/attach_fs' AS with_uri (TYPE ICEBERG, CATALOG_TYPE 'filesystem', URI 'http://localhost:8181');
+----
+Unsupported option 'uri' for an Iceberg filesystem catalog
+
+statement ok
+ATTACH '{TEST_DIR}/attach_fs' AS fs (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+
+statement ok
+CREATE SCHEMA fs.ns;
+
+statement ok
+CREATE TABLE fs.ns.t AS SELECT range AS i FROM range(3);
+
+statement error
+ATTACH '{TEST_DIR}/attach_fs' AS missing_default (TYPE ICEBERG, CATALOG_TYPE 'filesystem', DEFAULT_SCHEMA 'missing');
+----
+default_schema 'missing' does not exist
+
+statement ok
+DETACH fs;
+
+# The directory tree is the catalog: it persists, and the Hadoop catalog's name is accepted too
+statement ok
+ATTACH '{TEST_DIR}/attach_fs' AS fs (TYPE ICEBERG, CATALOG_TYPE 'hadoop', DEFAULT_SCHEMA 'ns');
+
+query I
+SELECT sum(i) FROM fs.t;
+----
+3
+
+statement ok
+DETACH fs;
+
+statement ok
+ATTACH '{TEST_DIR}/attach_fs' AS fs (TYPE ICEBERG, CATALOG_TYPE 'file_system', READ_ONLY);
+
+query I
+SELECT sum(i) FROM fs.ns.t;
+----
+3
+
+statement error
+INSERT INTO fs.ns.t VALUES (4);
+----
+read-only

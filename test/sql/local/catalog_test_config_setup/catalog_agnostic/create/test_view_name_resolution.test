@@ -121,5 +121,10 @@ drop view v_recursive_cte;
 statement ok
 drop table vn_base;
 
+# Leave the schema before dropping it: DuckDB resets the session schema to 'main' when its current schema is
+# dropped, and Iceberg catalogs have no 'main' schema
+statement ok
+use memory;
+
 statement ok
 drop schema my_datalake.view_names;

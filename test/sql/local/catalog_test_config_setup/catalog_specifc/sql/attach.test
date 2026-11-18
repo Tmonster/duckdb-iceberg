@@ -12,9 +12,9 @@ ATTACH '{TEST_DIR}/attach_wh' AS no_uri (TYPE ICEBERG, CATALOG_TYPE 'sql');
 Missing 'uri' option for an Iceberg SQL catalog
 
 statement error
-ATTACH '{TEST_DIR}/attach_wh' AS bad_type (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+ATTACH '{TEST_DIR}/attach_wh' AS bad_type (TYPE ICEBERG, CATALOG_TYPE 'nosuchtype');
 ----
-Unrecognized 'catalog_type' (filesystem)
+Unrecognized 'catalog_type' (nosuchtype)
 
 statement error
 ATTACH '{TEST_DIR}/attach_wh' AS bad_uri (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'mysql://localhost/db');

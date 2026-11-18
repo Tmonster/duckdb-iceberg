@@ -15,7 +15,7 @@ Unsupported option 'client_id' for an Iceberg Glue catalog
 statement error
 ATTACH ':' AS bad_type (TYPE ICEBERG, CATALOG_TYPE 'hive');
 ----
-Unrecognized 'catalog_type' (hive), accepted options are: rest, sql, glue
+Unrecognized 'catalog_type' (hive), accepted options are: rest, sql, glue, filesystem
 
 statement error
 ATTACH ':' AS missing_schema (TYPE ICEBERG, CATALOG_TYPE 'glue', ENDPOINT 'http://127.0.0.1:5055',
