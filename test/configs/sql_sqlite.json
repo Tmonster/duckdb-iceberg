@@ -1,0 +1,6 @@
+{
+	"extends": ["sql.json"],
+	"description": "Iceberg SQL catalog (CATALOG_TYPE 'sql') stored in a SQLite database, attached through the sqlite_scanner extension. Requires no service or network.",
+	"on_init": "ATTACH '{TEMP_DIR}/iceberg_sql_warehouse' AS my_datalake (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'sqlite:///{TEMP_DIR}/iceberg_sql_catalog.db'); CREATE SCHEMA IF NOT EXISTS my_datalake.default;",
+	"statically_loaded_extensions": ["core_functions", "parquet", "avro", "iceberg", "httpfs", "icu", "sqlite_scanner"]
+}

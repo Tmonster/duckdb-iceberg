@@ -47,7 +47,9 @@ def is_active_catalog(catalog: str) -> bool:
 
 
 def _requires_catalog_options(path: str) -> bool:
-    return "cloud" not in Path(path).parts
+    # Cloud tests bring their own catalogs, SQL catalog tests create theirs in a temporary directory
+    parts = Path(path).parts
+    return "cloud" not in parts and "sql_catalog" not in parts
 
 
 def _selected_catalog_profile(config: pytest.Config):

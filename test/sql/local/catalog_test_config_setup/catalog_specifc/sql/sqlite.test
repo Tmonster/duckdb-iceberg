@@ -1,0 +1,56 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/sql/sqlite.test
+# description: An Iceberg SQL catalog stored in SQLite
+# group: [sql]
+
+require-env CATALOG_TEST_CONFIG_SETUP sql
+
+require sqlite_scanner
+
+include test/sql/init_requires
+
+# The SQLAlchemy spelling of PyIceberg and the JDBC spelling of Iceberg Java
+statement ok
+ATTACH '{TEST_DIR}/sqlite_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'sqlite:///{TEST_DIR}/sqlite_catalog.db');
+
+statement ok
+CREATE SCHEMA cat.ns;
+
+statement ok
+CREATE TABLE cat.ns.t AS SELECT range AS i FROM range(3);
+
+statement ok
+DETACH cat;
+
+statement ok
+ATTACH '{TEST_DIR}/sqlite_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'jdbc:sqlite:{TEST_DIR}/sqlite_catalog.db');
+
+query I
+SELECT sum(i) FROM cat.ns.t;
+----
+3
+
+# The database is in WAL mode, so readers don't block commits
+query I
+SELECT * FROM sqlite_query('__iceberg_sql_cat', 'PRAGMA journal_mode');
+----
+wal
+
+# A transaction that reads the catalog tables (here through SHOW ALL TABLES) can still commit
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM (SHOW ALL TABLES) WHERE database = 'cat';
+----
+1
+
+statement ok
+INSERT INTO cat.ns.t VALUES (10);
+
+statement ok
+COMMIT;
+
+query I
+SELECT sum(i) FROM cat.ns.t;
+----
+13
