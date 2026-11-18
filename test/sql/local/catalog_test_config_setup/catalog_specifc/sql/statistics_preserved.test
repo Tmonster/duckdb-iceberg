@@ -1,0 +1,59 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/sql/statistics_preserved.test
+# description: A commit keeps the statistics files another engine recorded in the table metadata
+# group: [sql]
+
+require-env CATALOG_TEST_CONFIG_SETUP sql
+
+include test/sql/init_requires
+
+statement ok
+ATTACH '{TEST_DIR}/stats_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'duckdb:{TEST_DIR}/stats_catalog.duckdb');
+
+statement ok
+CREATE SCHEMA cat.ns;
+
+statement ok
+CREATE TABLE cat.ns.t AS SELECT range AS i FROM range(3);
+
+# Another engine computes Puffin statistics for the current snapshot and commits them (a SetStatistics update)
+statement ok
+SET VARIABLE base_location = (SELECT metadata_location FROM __iceberg_sql_cat.iceberg_tables);
+
+statement ok
+SET VARIABLE base_metadata = (SELECT content FROM read_text(getvariable('base_location')));
+
+statement ok
+SET VARIABLE snapshot_id = (SELECT regexp_extract(getvariable('base_metadata'), '"current-snapshot-id":\s*(-?[0-9]+)', 1));
+
+statement ok
+SET VARIABLE stats_location = '{TEST_DIR}/stats_wh/ns/t/metadata/99999-other-engine.metadata.json';
+
+statement ok
+COPY (SELECT replace(getvariable('base_metadata'), '"current-snapshot-id"',
+	'"statistics":[{"snapshot-id":' || getvariable('snapshot_id') || ',"statistics-path":"file:///other-engine/stats.puffin","file-size-in-bytes":100,"file-footer-size-in-bytes":10,"blob-metadata":[]}],"partition-statistics":[{"snapshot-id":' || getvariable('snapshot_id') || ',"statistics-path":"file:///other-engine/partition-stats.parquet","file-size-in-bytes":200}],"current-snapshot-id"'))
+TO '{TEST_DIR}/stats_wh/ns/t/metadata/99999-other-engine.metadata.json' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\n');
+
+statement ok
+UPDATE __iceberg_sql_cat.iceberg_tables SET metadata_location = getvariable('stats_location'),
+	previous_metadata_location = getvariable('base_location');
+
+# DuckDB's next commit keeps both
+statement ok
+INSERT INTO cat.ns.t VALUES (10);
+
+query I
+SELECT sum(i) FROM cat.ns.t;
+----
+13
+
+statement ok
+SET VARIABLE new_location = (SELECT metadata_location FROM __iceberg_sql_cat.iceberg_tables);
+
+statement ok
+SET VARIABLE new_metadata = (SELECT content FROM read_text(getvariable('new_location')));
+
+query II
+SELECT getvariable('new_metadata') LIKE '%"statistics-path":"file:///other-engine/stats.puffin"%',
+	getvariable('new_metadata') LIKE '%"statistics-path":"file:///other-engine/partition-stats.parquet"%';
+----
+true	true

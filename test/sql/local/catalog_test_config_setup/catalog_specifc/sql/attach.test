@@ -1,0 +1,141 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/sql/attach.test
+# description: ATTACH options of the Iceberg SQL catalog, and catalogs persisting across attaches
+# group: [sql]
+
+require-env CATALOG_TEST_CONFIG_SETUP sql
+
+include test/sql/init_requires
+
+statement error
+ATTACH '{TEST_DIR}/attach_wh' AS no_uri (TYPE ICEBERG, CATALOG_TYPE 'sql');
+----
+Missing 'uri' option for an Iceberg SQL catalog
+
+statement error
+ATTACH '{TEST_DIR}/attach_wh' AS bad_type (TYPE ICEBERG, CATALOG_TYPE 'filesystem');
+----
+Unrecognized 'catalog_type' (filesystem)
+
+statement error
+ATTACH '{TEST_DIR}/attach_wh' AS bad_uri (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'mysql://localhost/db');
+----
+Unsupported database 'mysql'
+
+# REST options don't apply to a SQL catalog
+statement error
+ATTACH '{TEST_DIR}/attach_wh' AS rest_option (TYPE ICEBERG, CATALOG_TYPE 'sql',
+	URI 'duckdb:{TEST_DIR}/attach_catalog.duckdb', CLIENT_ID 'admin');
+----
+Unsupported option 'client_id' for an Iceberg SQL catalog
+
+# Without INIT_CATALOG_TABLES the catalog tables have to exist already
+statement error
+ATTACH '{TEST_DIR}/attach_wh' AS no_init (TYPE ICEBERG, CATALOG_TYPE 'sql',
+	URI 'duckdb:{TEST_DIR}/attach_empty.duckdb', INIT_CATALOG_TABLES false);
+----
+has no catalog tables
+
+# The JDBC URI spelling is accepted too
+statement ok
+ATTACH '{TEST_DIR}/attach_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql',
+	URI 'jdbc:duckdb:{TEST_DIR}/attach_catalog.duckdb');
+
+statement ok
+CREATE SCHEMA cat.ns;
+
+statement ok
+CREATE TABLE cat.ns.t AS SELECT range AS i FROM range(3);
+
+statement error
+ATTACH '{TEST_DIR}/attach_wh' AS missing_default (TYPE ICEBERG, CATALOG_TYPE 'sql',
+	URI 'duckdb:{TEST_DIR}/attach_catalog.duckdb', DEFAULT_SCHEMA 'does_not_exist');
+----
+default_schema 'does_not_exist' does not exist
+
+statement ok
+DETACH cat;
+
+# The catalog database is detached together with the Iceberg catalog
+query I
+SELECT count(*) FROM duckdb_databases() WHERE database_name = '__iceberg_sql_cat';
+----
+0
+
+# Tables persist in the catalog database
+statement ok
+ATTACH '{TEST_DIR}/attach_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql',
+	URI 'duckdb:{TEST_DIR}/attach_catalog.duckdb', DEFAULT_SCHEMA 'ns');
+
+query I
+SELECT sum(i) FROM cat.t;
+----
+3
+
+statement ok
+DETACH cat;
+
+# Several catalogs can share one database, the 'catalog_name' column keeps them apart. They share one attachment
+# of the database, named after the catalog that attached it first
+statement ok
+ATTACH '{TEST_DIR}/attach_wh_other' AS other (TYPE ICEBERG, CATALOG_TYPE 'sql',
+	URI 'duckdb:{TEST_DIR}/attach_catalog.duckdb', CATALOG_NAME 'other');
+
+query I
+SELECT count(*) FROM (SHOW ALL TABLES) WHERE database = 'other';
+----
+0
+
+statement ok
+CREATE SCHEMA other.ns;
+
+statement ok
+CREATE TABLE other.ns.t AS SELECT 42 AS i;
+
+statement ok
+ATTACH '{TEST_DIR}/attach_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql',
+	URI 'duckdb:{TEST_DIR}/attach_catalog.duckdb');
+
+query II
+SELECT (SELECT sum(i) FROM cat.ns.t), (SELECT sum(i) FROM other.ns.t);
+----
+3	42
+
+query II
+SELECT catalog_name, table_name FROM __iceberg_sql_other.iceberg_tables ORDER BY ALL;
+----
+cat	t
+other	t
+
+statement ok
+DETACH other;
+
+statement ok
+DETACH cat;
+
+# CATALOG_NAME defaults to the ATTACH alias, so the same catalog attached under another alias has to name it
+statement ok
+ATTACH '{TEST_DIR}/attach_wh' AS other_alias (TYPE ICEBERG, CATALOG_TYPE 'sql',
+	URI 'duckdb:{TEST_DIR}/attach_catalog.duckdb');
+
+query I
+SELECT count(*) FROM (SHOW ALL TABLES) WHERE database = 'other_alias';
+----
+0
+
+statement ok
+DETACH other_alias;
+
+# A read-only attach can read but not write
+statement ok
+ATTACH '{TEST_DIR}/attach_wh' AS ro (TYPE ICEBERG, CATALOG_TYPE 'sql',
+	URI 'duckdb:{TEST_DIR}/attach_catalog.duckdb', CATALOG_NAME 'cat', READ_ONLY);
+
+query I
+SELECT sum(i) FROM ro.ns.t;
+----
+3
+
+statement error
+INSERT INTO ro.ns.t VALUES (4);
+----
+read-only

@@ -1,0 +1,121 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/sql/ddl.test
+# description: Renames, drops and table locations in the Iceberg SQL catalog
+# group: [sql]
+
+require-env CATALOG_TEST_CONFIG_SETUP sql
+
+include test/sql/init_requires
+
+statement ok
+ATTACH '{TEST_DIR}/ddl_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'duckdb:{TEST_DIR}/ddl_catalog.duckdb');
+
+statement ok
+CREATE SCHEMA cat.ns;
+
+statement ok
+CREATE TABLE cat.ns.t AS SELECT range AS i FROM range(4);
+
+# A rename only updates the table's row, the files stay where they are
+statement ok
+SET VARIABLE location_before = (SELECT metadata_location FROM __iceberg_sql_cat.iceberg_tables);
+
+statement ok
+ALTER TABLE cat.ns.t RENAME TO renamed;
+
+query II
+SELECT table_name, metadata_location = getvariable('location_before') FROM __iceberg_sql_cat.iceberg_tables;
+----
+renamed	true
+
+query I
+SELECT sum(i) FROM cat.ns.renamed;
+----
+6
+
+statement error
+SELECT * FROM cat.ns.t;
+----
+does not exist
+
+# A schema can only be dropped once it is empty
+statement error
+DROP SCHEMA cat.ns;
+----
+Namespace ns is not empty
+
+# Dropping a table only unregisters it, unless the catalog is attached with PURGE_REQUESTED
+statement ok
+DROP TABLE cat.ns.renamed;
+
+query I
+SELECT count(*) FROM __iceberg_sql_cat.iceberg_tables;
+----
+0
+
+query I
+SELECT count(*) > 0 FROM glob('{TEST_DIR}/ddl_wh/ns/t/metadata/*.metadata.json');
+----
+true
+
+statement ok
+DROP SCHEMA cat.ns;
+
+query I
+SELECT count(*) FROM __iceberg_sql_cat.iceberg_namespace_properties;
+----
+0
+
+statement ok
+DETACH cat;
+
+statement ok
+ATTACH '{TEST_DIR}/ddl_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'duckdb:{TEST_DIR}/ddl_catalog.duckdb',
+	PURGE_REQUESTED true);
+
+statement ok
+CREATE SCHEMA cat.purged;
+
+statement ok
+CREATE TABLE cat.purged.t AS SELECT 1 AS i;
+
+query I
+SELECT count(*) > 0 FROM glob('{TEST_DIR}/ddl_wh/purged/t/**');
+----
+true
+
+statement ok
+DROP TABLE cat.purged.t;
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/ddl_wh/purged/t/**');
+----
+0
+
+# A table location outside the warehouse is never purged
+statement ok
+CREATE TABLE cat.purged.outside WITH ('location' = '{TEST_DIR}/outside_wh/outside') AS SELECT 1 AS i;
+
+query I
+SELECT metadata_location LIKE '{TEST_DIR}/outside_wh/outside/metadata/%' FROM __iceberg_sql_cat.iceberg_tables;
+----
+true
+
+statement ok
+DROP TABLE cat.purged.outside;
+
+query I
+SELECT count(*) > 0 FROM glob('{TEST_DIR}/outside_wh/outside/metadata/*.metadata.json');
+----
+true
+
+# A namespace's 'location' property is where its tables are created by default
+statement ok
+CALL set_iceberg_schema_properties(cat.purged, {'location': '{TEST_DIR}/namespace_location'});
+
+statement ok
+CREATE TABLE cat.purged.located AS SELECT 1 AS i;
+
+query I
+SELECT metadata_location LIKE '{TEST_DIR}/namespace_location/located/metadata/%' FROM __iceberg_sql_cat.iceberg_tables;
+----
+true

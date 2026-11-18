@@ -1,0 +1,127 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/sql/catalog_tables.test
+# description: What the Iceberg SQL catalog stores: the JDBC catalog tables and the table metadata files
+# group: [sql]
+
+require-env CATALOG_TEST_CONFIG_SETUP sql
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+ATTACH '{TEST_DIR}/tables_wh' AS cat (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'duckdb:{TEST_DIR}/tables_catalog.duckdb');
+
+statement ok
+CREATE SCHEMA cat.ns;
+
+# A namespace without properties is recorded with 'exists' = 'true', which is not shown as a property
+query III
+SELECT namespace, property_key, property_value FROM __iceberg_sql_cat.iceberg_namespace_properties;
+----
+ns	exists	true
+
+query II
+FROM iceberg_schema_properties(cat.ns) ORDER BY ALL;
+----
+location	{TEST_DIR}/tables_wh/ns
+
+# A table is published at commit: until then it isn't in the catalog database
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE cat.ns.t (i INT);
+
+query I
+SELECT count(*) FROM __iceberg_sql_cat.iceberg_tables;
+----
+0
+
+statement ok
+COMMIT;
+
+query IIIII
+SELECT catalog_name, table_namespace, table_name, previous_metadata_location IS NULL, iceberg_type
+FROM __iceberg_sql_cat.iceberg_tables;
+----
+cat	ns	t	true	TABLE
+
+# The first metadata file is version 0, at the default location '<warehouse>/<namespace>/<table>'
+query I
+SELECT metadata_location LIKE '{TEST_DIR}/tables_wh/ns/t/metadata/00000-%.metadata.json' FROM __iceberg_sql_cat.iceberg_tables;
+----
+true
+
+statement ok
+SET VARIABLE v0 = (SELECT metadata_location FROM __iceberg_sql_cat.iceberg_tables);
+
+statement ok
+INSERT INTO cat.ns.t VALUES (1), (2);
+
+statement ok
+INSERT INTO cat.ns.t VALUES (3);
+
+# Each commit writes the next version, and remembers the version it replaced
+query II
+SELECT
+	regexp_extract(metadata_location, '/(\d+)-[^/]*\.metadata\.json$', 1),
+	regexp_extract(previous_metadata_location, '/(\d+)-[^/]*\.metadata\.json$', 1)
+FROM __iceberg_sql_cat.iceberg_tables;
+----
+00002	00001
+
+statement ok
+SET VARIABLE current_metadata = (SELECT metadata_location FROM __iceberg_sql_cat.iceberg_tables);
+
+# The metadata-log records the replaced files, each with the time it became current
+query II
+SELECT len(log), log[1]."metadata-file" = getvariable('v0')
+FROM (SELECT json_extract(content::JSON, '$."metadata-log"')::STRUCT("metadata-file" VARCHAR, "timestamp-ms" BIGINT)[] AS log
+      FROM read_text(getvariable('current_metadata')));
+----
+2	true
+
+# The metadata files are plain Iceberg metadata, readable without the catalog
+query I
+SELECT sum(i) FROM iceberg_scan(getvariable('current_metadata'));
+----
+6
+
+statement ok
+DETACH cat;
+
+# Catalogs created by the V0 schema of the JDBC catalog have no 'iceberg_type' column
+statement ok
+ATTACH '{TEST_DIR}/v0_catalog.duckdb' AS v0_db;
+
+statement ok
+CREATE TABLE v0_db.iceberg_tables (catalog_name VARCHAR(255) NOT NULL, table_namespace VARCHAR(255) NOT NULL,
+	table_name VARCHAR(255) NOT NULL, metadata_location VARCHAR(1000), previous_metadata_location VARCHAR(1000),
+	PRIMARY KEY (catalog_name, table_namespace, table_name));
+
+statement ok
+CREATE TABLE v0_db.iceberg_namespace_properties (catalog_name VARCHAR(255) NOT NULL, namespace VARCHAR(255) NOT NULL,
+	property_key VARCHAR(255) NOT NULL, property_value VARCHAR(1000), PRIMARY KEY (catalog_name, namespace, property_key));
+
+statement ok
+DETACH v0_db;
+
+statement ok
+ATTACH '{TEST_DIR}/v0_wh' AS v0 (TYPE ICEBERG, CATALOG_TYPE 'sql', URI 'duckdb:{TEST_DIR}/v0_catalog.duckdb',
+	INIT_CATALOG_TABLES false);
+
+statement ok
+CREATE SCHEMA v0.ns;
+
+statement ok
+CREATE TABLE v0.ns.t AS SELECT 7 AS i;
+
+query I
+SELECT i FROM v0.ns.t;
+----
+7
+
+query II
+SELECT table_name, metadata_location IS NOT NULL FROM __iceberg_sql_v0.iceberg_tables;
+----
+t	true
