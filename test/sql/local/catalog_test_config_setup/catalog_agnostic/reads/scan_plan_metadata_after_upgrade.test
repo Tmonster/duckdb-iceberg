@@ -1,0 +1,47 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/scan_plan_metadata_after_upgrade.test
+# description: iceberg_scan_plan serializes the table metadata of a table upgraded from v2 to v3
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.scan_plan_upgrade;
+
+statement ok
+CREATE TABLE my_datalake.default.scan_plan_upgrade (id INT) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.scan_plan_upgrade SELECT range FROM range(5);
+
+statement ok
+ALTER TABLE my_datalake.default.scan_plan_upgrade SET ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.scan_plan_upgrade SELECT range FROM range(5, 10);
+
+# The snapshot from before the upgrade has no first-row-id, which a v3 table's metadata may contain
+query I
+SELECT count(*) FROM iceberg_scan_plan('my_datalake.default.scan_plan_upgrade');
+----
+2
+
+# The serialized metadata keeps the table's snapshot-log, and the summaries the snapshots were committed with
+query II
+SELECT
+	len(json_extract(metadata::JSON, '$."snapshot-log"')::JSON[]),
+	list_sort([json_extract_string(s, '$.summary."added-records"') FOR s IN json_extract(metadata::JSON, '$.snapshots')::JSON[]])
+FROM iceberg_scan_plan('my_datalake.default.scan_plan_upgrade')
+LIMIT 1;
+----
+2	[5, 5]
+
+statement ok
+DROP TABLE my_datalake.default.scan_plan_upgrade;

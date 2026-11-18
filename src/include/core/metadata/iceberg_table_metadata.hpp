@@ -130,6 +130,13 @@ public:
 	void VerifyDataFileFormat() const;
 	void VerifyDeleteFileFormat() const;
 	string ToJSON() const;
+	//! The 'statistics' and 'partition-statistics' files to write: those of snapshots that still exist, as JSON
+	string StatisticsToWrite() const {
+		return StatisticsJSON(statistics_json);
+	}
+	string PartitionStatisticsToWrite() const {
+		return StatisticsJSON(partition_statistics_json);
+	}
 	void WriteMetadata(ClientContext &context, const string &path) const;
 	bool WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
 
@@ -146,6 +153,7 @@ private:
 	JSONMutableValue TablePropertiesToJSON(JSONWriter &writer) const;
 	JSONMutableValue SnapshotsToJSON(JSONWriter &writer) const;
 	JSONMutableValue SnapshotLogToJSON(JSONWriter &writer) const;
+	JSONMutableValue MetadataLogToJSON(JSONWriter &writer) const;
 	JSONMutableValue SortOrdersToJSON(JSONWriter &writer) const;
 
 public:
@@ -195,6 +203,11 @@ public:
 
 private:
 	int32_t current_schema_id = 0;
+	//! 'statistics' and 'partition-statistics' as JSON arrays (empty if absent). DuckDB doesn't write statistics
+	//! files, but keeps those of other engines when it commits.
+	string statistics_json;
+	string partition_statistics_json;
+	string StatisticsJSON(const string &statistics_json) const;
 	IcebergTableMetadataSchemas schemas;
 };
 

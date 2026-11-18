@@ -43,3 +43,13 @@ test_mock_native:
 		"$(MOCK_TEST_BINARY)" --test-config "$(PROJ_DIR)test/configs/mock_native.json" \
 			"$(MOCK_NATIVE_TEST_FILTER)" "exclude:*.test_slow"; \
 	fi
+
+# The same suite with iceberg_verify_client_commit: every commit is also applied client-side and compared to the
+# native catalog's result. Not part of the standard test targets, since it adds a table load per commit.
+.PHONY: test_mock_native_verify_commit test_mock_native_verify_commit_release test_mock_native_verify_commit_debug test_mock_native_verify_commit_reldebug test_mock_native_verify_commit_relassert
+test_mock_native_verify_commit_release test_mock_native_verify_commit_debug test_mock_native_verify_commit_reldebug test_mock_native_verify_commit_relassert:
+	$(MAKE) test_mock_native_verify_commit MOCK_TEST_BINARY="$(PROJ_DIR)build/$(patsubst test_mock_native_verify_commit_%,%,$@)/test/unittest"
+
+test_mock_native_verify_commit:
+	"$(MOCK_TEST_BINARY)" --test-config "$(PROJ_DIR)test/configs/mock_native_verify_commit.json" \
+		"$(MOCK_NATIVE_TEST_FILTER)" "exclude:*.test_slow"
