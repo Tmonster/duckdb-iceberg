@@ -1,8 +1,13 @@
 #include "maintenance/rewrite_data_files_executor.hpp"
 
 #include "duckdb/common/exception.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "iceberg_logging.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
+#include "catalog/transaction/iceberg_transaction_metadata.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 
 namespace duckdb {

@@ -7,7 +7,7 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "planning/snapshot/iceberg_scan_info.hpp"
 
 using namespace duckdb;

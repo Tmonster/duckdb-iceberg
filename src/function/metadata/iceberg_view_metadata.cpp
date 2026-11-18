@@ -8,8 +8,8 @@
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/rest/iceberg_rest_catalog.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "rest_catalog/objects/list.hpp"
 #include "rest_catalog/objects/load_view_result.hpp"
 #include "duckdb/common/json_document.hpp"
@@ -23,11 +23,11 @@ namespace duckdb {
 //! LoadView REST call, mirroring `iceberg_load_table_response` for tables. Useful for discovering
 //! views on a REST catalog, including views written in a SQL dialect DuckDB can't parse.
 struct IcebergViewMetadataBindData : public TableFunctionData {
-	IcebergCatalog &ic_catalog;
+	IcebergRestCatalog &ic_catalog;
 	IcebergSchemaEntry &ic_schema;
 	string view_name;
 
-	IcebergViewMetadataBindData(IcebergCatalog &ic_catalog, IcebergSchemaEntry &ic_schema, string view_name)
+	IcebergViewMetadataBindData(IcebergRestCatalog &ic_catalog, IcebergSchemaEntry &ic_schema, string view_name)
 	    : ic_catalog(ic_catalog), ic_schema(ic_schema), view_name(std::move(view_name)) {
 	}
 };
@@ -77,7 +77,11 @@ static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, 
 		throw InvalidInputException("View '%s' is not in an Iceberg REST catalog", input_string);
 	}
 
-	auto &ic_catalog = view_catalog.Cast<IcebergCatalog>();
+	auto &iceberg_catalog = view_catalog.Cast<IcebergCatalog>();
+	if (iceberg_catalog.GetIcebergCatalogType() != IcebergCatalogType::REST) {
+		throw InvalidInputException("View '%s' is not in an Iceberg REST catalog", input_string);
+	}
+	auto &ic_catalog = iceberg_catalog.Cast<IcebergRestCatalog>();
 	auto &ic_schema = view_entry.schema.Cast<IcebergSchemaEntry>();
 
 	auto ret = make_uniq<IcebergViewMetadataBindData>(ic_catalog, ic_schema, view_entry.name.GetIdentifierName());

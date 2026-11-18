@@ -10,10 +10,10 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
-#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/rest/iceberg_rest_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -128,7 +128,7 @@ static unique_ptr<SecretEntry> GetNamedHTTPProxySecret(ClientContext &context, c
 	return nullptr;
 }
 
-static unique_ptr<SecretEntry> LookupHTTPSecretForCatalog(ClientContext &context, IcebergCatalog &catalog) {
+static unique_ptr<SecretEntry> LookupHTTPSecretForCatalog(ClientContext &context, IcebergRestCatalog &catalog) {
 	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
 	auto catalog_url = catalog.GetBaseUrl().GetURLEncoded();
 	auto secret_match = context.db->GetSecretManager().LookupSecret(transaction, catalog_url, "http");
@@ -140,17 +140,21 @@ static unique_ptr<SecretEntry> LookupHTTPSecretForCatalog(ClientContext &context
 
 unique_ptr<SecretEntry> IcebergTableSecretProvider::GetHTTPSecretForCatalog(ClientContext &context,
                                                                             IcebergCatalog &catalog) {
-	switch (catalog.auth_handler->type) {
+	if (catalog.GetIcebergCatalogType() != IcebergCatalogType::REST) {
+		return nullptr;
+	}
+	auto &rest_catalog = catalog.Cast<IcebergRestCatalog>();
+	switch (rest_catalog.auth_handler->type) {
 	case IcebergAuthorizationType::SIGV4: {
-		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
+		auto &sigv4 = rest_catalog.auth_handler->Cast<SIGV4Authorization>();
 		auto named_secret = GetNamedHTTPProxySecret(context, sigv4.secret);
 		if (named_secret) {
 			return named_secret;
 		}
-		return LookupHTTPSecretForCatalog(context, catalog);
+		return LookupHTTPSecretForCatalog(context, rest_catalog);
 	}
 	case IcebergAuthorizationType::OAUTH2:
-		return LookupHTTPSecretForCatalog(context, catalog);
+		return LookupHTTPSecretForCatalog(context, rest_catalog);
 	default:
 		return nullptr;
 	}
@@ -178,7 +182,8 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 	auto &table_info = table_entry.table_info;
 
 	auto refreshed_credentials =
-	    IRCAPI::GetTableCredentials(context, ic_catalog, iceberg_schema, table_name.GetIdentifierName());
+	    IRCAPI::GetTableCredentials(context, ic_catalog.Cast<IcebergRestCatalog>(), iceberg_schema,
+	                                table_name.GetIdentifierName());
 	if (refreshed_credentials.error_) {
 		throw HTTPException(StringUtil::Format("Could not refresh Iceberg vended credentials for table '%s': "
 		                                       "GetTableInformation returned response code %s with message \"%s\"",
@@ -253,6 +258,21 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 bool IcebergTableSecretProvider::SupportsStorageType(const string &storage_type) {
 	return StringUtil::CIEquals(storage_type, "s3") || StringUtil::CIEquals(storage_type, "gcs") ||
 	       StringUtil::CIEquals(storage_type, "r2");
+}
+
+void IcebergTableSecretProvider::StoreVendedSecret(ClientContext &context, CreateSecretInput &info) {
+	auto &secret_manager = SecretManager::Get(context);
+	if (info.provider != Identifier(Provider())) {
+		(void)secret_manager.CreateSecret(context, info);
+		return;
+	}
+	auto secret = CreateSecret(context, info);
+	if (!secret) {
+		throw InternalException("The Iceberg secret provider did not return a secret for type: %s", info.type);
+	}
+	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
+	(void)secret_manager.RegisterSecret(transaction, std::move(secret), info.on_conflict, info.persist_type,
+	                                    info.storage_type.GetIdentifierName());
 }
 
 unique_ptr<BaseSecret> IcebergTableSecretProvider::CreateSecret(ClientContext &context, CreateSecretInput &input) {

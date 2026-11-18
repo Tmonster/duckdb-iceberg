@@ -2,8 +2,8 @@
 
 #include "catalog/rest/api/iceberg_expression.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/iceberg_rest_catalog.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
@@ -65,7 +65,9 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 	unique_ptr<IcebergScanPlanProvider> provider;
 	if (server_side_planning_enabled) {
 		auto &table_info = table_entry->table_info;
-		if (table_info.catalog.supported_urls.count(IcebergServerSideScanPlanning::PLAN_ENDPOINT)) {
+		auto &catalog = table_info.catalog;
+		if (catalog.GetIcebergCatalogType() == IcebergCatalogType::REST &&
+		    catalog.Cast<IcebergRestCatalog>().supported_urls.count(IcebergServerSideScanPlanning::PLAN_ENDPOINT)) {
 			rest_api_objects::PlanTableScanRequest request;
 			request.snapshot_id = context.snapshot.snapshot->snapshot_id;
 			request.case_sensitive = true;

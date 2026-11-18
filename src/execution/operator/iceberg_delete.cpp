@@ -19,10 +19,10 @@
 #include "duckdb/parallel/executor_task.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
+#include "catalog/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
@@ -30,7 +30,7 @@
 
 #include "core/deletes/iceberg_deletion_vector.hpp"
 #include "core/metadata/puffin/iceberg_puffin_metadata.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_update.hpp"
+#include "catalog/transaction/iceberg_transaction_update.hpp"
 #include "iceberg_logging.hpp"
 
 namespace duckdb {

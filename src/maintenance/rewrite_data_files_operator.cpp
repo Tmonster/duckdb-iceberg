@@ -4,8 +4,8 @@
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "maintenance/maintenance_table_loader.hpp"
 #include "maintenance/rewrite_data_files_executor.hpp"

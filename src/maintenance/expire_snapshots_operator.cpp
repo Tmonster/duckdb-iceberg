@@ -4,11 +4,11 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/iceberg_catalog.hpp"
+#include "catalog/transaction/iceberg_transaction.hpp"
+#include "catalog/transaction/iceberg_transaction_data.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "maintenance/maintenance_table_loader.hpp"
 
