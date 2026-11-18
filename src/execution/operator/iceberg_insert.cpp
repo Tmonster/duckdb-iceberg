@@ -528,7 +528,7 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, const 
 		CastFunctionSet default_casts;
 		auto get_input = GetCastFunctionInput::Default();
 		auto bound_cast = default_casts.GetCastFunction(source->GetReturnType(), target_type, get_input);
-		source = BoundCastExpression::CreateDefault(std::move(source), target_type, std::move(bound_cast));
+		source = BoundCastExpression::Create(std::move(source), target_type, std::move(bound_cast));
 	}
 	if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
 		source = BoundCastExpression::Create(std::move(source), LogicalType::TIMESTAMP,

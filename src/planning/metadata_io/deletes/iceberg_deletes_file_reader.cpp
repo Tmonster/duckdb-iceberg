@@ -9,7 +9,7 @@
 
 namespace duckdb {
 
-static void IcebergDeletesScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
+static void IcebergDeletesScanSerialize(Serializer &serializer, const optional_ptr<const FunctionData> bind_data,
                                         const BoundTableFunction &function) {
 	throw NotImplementedException("IcebergDeletesScan serialization not implemented");
 }

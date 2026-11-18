@@ -81,7 +81,7 @@ static bool IcebergScanSerializationEnabled(ClientContext &context) {
 	return DEFAULT_ENABLE_SCAN_SERIALIZATION;
 }
 
-static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
+static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<const FunctionData> bind_data,
                                  const BoundTableFunction &function) {
 	if (!bind_data || !function.function_info) {
 		throw NotImplementedException("IcebergScan serialization requires bound scan state");
@@ -274,13 +274,13 @@ BindInfo IcebergBindInfo(TableFunctionGetBindInfoInput &input) {
 	return result;
 }
 
-static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, optional_ptr<FunctionData> bind_data) {
-	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
+static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, cow_ptr<FunctionData> &bind_data) {
+	auto &multi_file_data = bind_data.write().Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
 	file_list.GetScanPlanner().SetScanOrder(std::move(order_options));
 }
 
-static vector<column_t> IcebergGetRowIdColumns(ClientContext &, optional_ptr<FunctionData>) {
+static vector<column_t> IcebergGetRowIdColumns(ClientContext &, optional_ptr<const FunctionData>) {
 	vector<column_t> result;
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
