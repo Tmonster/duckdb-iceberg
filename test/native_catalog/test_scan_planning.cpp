@@ -5,6 +5,7 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/main/context.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
@@ -1239,7 +1240,7 @@ private:
 //! Throws from the next task start hook once armed, and lets a test wait until that happened.
 class ThrowingTaskStartState : public ClientContextState {
 public:
-	void OnTaskStart(ClientContext &context) override {
+	void OnTaskStart(Context &context) override {
 		{
 			lock_guard<mutex> guard(lock);
 			if (!armed) {
@@ -1517,8 +1518,8 @@ TEST_CASE("Iceberg delete file read task that fails before it runs reaches the o
 	// Two read tasks, and no thread besides the two callers below that could run them.
 	DeleteFileLoadTest test(IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK + 1,
 	                        {"SET threads=2", "SET external_threads=2", "SET async_threads=0"});
-	auto hook =
-	    test.test.connection.context->registered_state->GetOrCreate<ThrowingTaskStartState>("throwing_task_start");
+	auto hook = test.test.connection.context->GetContext().GetRegisteredState().GetOrCreate<ThrowingTaskStartState>(
+	    "throwing_task_start");
 	auto &last = test.descriptors.back();
 	auto gated = make_uniq<GatedManifestFileSystem>(test.descriptors.front().file_path, 0);
 	auto &gate = *gated;

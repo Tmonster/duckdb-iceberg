@@ -43,9 +43,10 @@ static optional_ptr<IcebergMultiFileList> TryGetIcebergFileList(LogicalGet &get)
 	return multi_file_data.file_list->Cast<IcebergMultiFileList>();
 }
 
-static void IcebergLateMaterializationFilterPushdown(ClientContext &context, LogicalGet &get, FunctionData *bind_data,
+static void IcebergLateMaterializationFilterPushdown(ClientContext &context, LogicalGet &get,
+                                                     optional_ptr<const FunctionData> bind_data,
                                                      vector<unique_ptr<Expression>> &filters) {
-	auto &data = bind_data->Cast<MultiFileBindData>();
+	auto &data = get.bind_data.write().Cast<MultiFileBindData>();
 	MultiFilePushdownInfo info(get.table_index, get.names, get.GetColumnIds(), get.extra_info);
 	auto new_list =
 	    data.multi_file_reader->ComplexFilterPushdown(context, *data.file_list, data.file_options, info, filters);

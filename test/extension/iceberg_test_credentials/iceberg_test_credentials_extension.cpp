@@ -155,7 +155,7 @@ public:
 		if (!config.secret_name.empty()) {
 			return config.secret_name;
 		}
-		auto state = context.registered_state->GetOrCreate<TransactionCredentials>("iceberg_test_credentials");
+		auto state = context.GetContext().GetRegisteredState().GetOrCreate<TransactionCredentials>("iceberg_test_credentials");
 		auto &name = state->by_table[key];
 		if (name.empty()) {
 			CreateSecretInput input;

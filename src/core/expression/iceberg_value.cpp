@@ -131,8 +131,8 @@ static Value DeserializeHugeintDecimal(const string_t &blob, uint8_t width, uint
 static DeserializeResult DeserializeDecimal(const string_t &blob, const LogicalType &type) {
 	D_ASSERT(type.id() == LogicalTypeId::DECIMAL);
 
-	uint8_t width;
-	uint8_t scale;
+	uint32_t width;
+	uint32_t scale;
 	if (!type.GetDecimalProperties(width, scale)) {
 		return DeserializeError(blob, type);
 	}

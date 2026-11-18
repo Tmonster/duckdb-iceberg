@@ -262,13 +262,13 @@ ALTER TABLE my_datalake.default.geography_table RENAME COLUMN c TO c2;
 statement ok
 ALTER TABLE my_datalake.default.geography_table SET PARTITIONED BY (id);
 
-# Geography isn't a DuckDB type, so it can't be declared
+# Geography columns can't be declared from DuckDB yet: DuckDB's GEOGRAPHY type is not mapped to an Iceberg type
 statement error
 CREATE TABLE my_datalake.default.declared_geography (g GEOGRAPHY);
 ----
-Catalog Error: Type with name GEOGRAPHY does not exist!
+Column type GEOGRAPHY is not a valid Iceberg Type
 
 statement error
 ALTER TABLE my_datalake.default.geography_table ADD COLUMN g2 GEOGRAPHY('OGC:CRS84');
 ----
-Catalog Error: Type with name GEOGRAPHY does not exist!
+Column type GEOGRAPHY is not a valid Iceberg Type
