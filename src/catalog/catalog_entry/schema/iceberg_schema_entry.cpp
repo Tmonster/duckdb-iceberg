@@ -318,11 +318,6 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreatePragmaFunction(CatalogTrans
 	throw BinderException("Iceberg databases do not support creating pragma functions");
 }
 
-optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateCollation(CatalogTransaction transaction,
-                                                               CreateCollationInfo &info) {
-	throw BinderException("Iceberg databases do not support creating collations");
-}
-
 static optional_ptr<const IcebergSortOrderField>
 FindCurrentSortOrderFieldBySourceId(const IcebergTableMetadata &table_metadata, idx_t column_id,
                                     int32_t &sort_order_id);
